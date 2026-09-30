@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Emberdeep</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;700&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: torchlit dungeon canvas on the left, a parchment-toned ledger of stats and log on the right; stacks on phones. Single dark look by design. */
+:root {
+  --bg: #120f16;
+  --panel: #1c1722;
+  --line: #2e2636;
+  --fg: #eadfc8;
+  --muted: #968aa0;
+  --torch: #f2a649;
+  --blood: #de5561;
+  --moss: #86b86f;
+  --frost: #7fb3d9;
+  --display: "Pixelify Sans", "Courier New", monospace;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+}
+html, body { background: var(--bg); color: var(--fg); }
+body { font-family: var(--mono); font-size: 14px; line-height: 1.5; padding-inline: 16px; padding-block: 20px 28px; }
+.wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 18px; }
+header { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px 20px; }
+h1 { font-family: var(--display); font-weight: 700; font-size: clamp(30px, 5vw, 46px); line-height: 1; margin: 0; letter-spacing: .02em; color: var(--torch); text-shadow: 0 0 18px rgba(242,166,73,.35); text-wrap: balance; }
+.tag { color: var(--muted); margin: 0; }
+.game { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 18px; align-items: start; }
+@media (max-width: 860px) { .game { grid-template-columns: minmax(0, 1fr); } }
+.stage { position: relative; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #07060a; aspect-ratio: 32 / 20; max-width: 100%; }
+canvas { display: block; width: 100%; height: 100%; touch-action: manipulation; }
+.overlay { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(10,8,13,.82); text-align: center; padding: 16px; }
+.overlay h2 { font-family: var(--display); font-size: clamp(26px, 5vw, 40px); margin: 0 0 6px; }
+.overlay p { margin: 0 0 16px; color: var(--muted); max-width: 40ch; }
+.side { display: grid; gap: 14px; min-width: 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 14px; display: grid; gap: 10px; }
+.label { font-size: 11px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); }
+.row { display: flex; justify-content: space-between; gap: 8px; font-variant-numeric: tabular-nums; }
+.bar { height: 8px; background: #0c0a10; border-radius: 4px; overflow: hidden; }
+.bar > i { display: block; height: 100%; transition: width .2s; }
+.hp > i { background: var(--blood); }
+.xp > i { background: var(--frost); }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; }
+.stat b { display: block; font-family: var(--display); font-size: 22px; color: var(--fg); font-weight: 400; }
+.stat span { font-size: 11px; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
+.gear { font-size: 13px; display: grid; gap: 2px; }
+.gear em { font-style: normal; color: var(--torch); }
+.log { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 12.5px; min-height: 9.5em; }
+.log li { color: var(--muted); }
+.log li:first-child { color: var(--fg); }
+.log .hit { color: var(--torch); } .log .hurt { color: var(--blood); } .log .good { color: var(--moss); } .log .info { color: var(--frost); }
+.controls { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; justify-content: space-between; }
+.pad { display: grid; grid-template-columns: repeat(3, 44px); grid-template-rows: repeat(3, 44px); gap: 4px; }
+button { font-family: var(--display); font-size: 16px; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; padding: 8px 14px; }
+button:hover { border-color: var(--torch); }
+button:focus-visible { outline: 2px solid var(--torch); outline-offset: 2px; }
+button:disabled { opacity: .4; cursor: default; border-color: var(--line); }
+.pad button { padding: 0; font-size: 18px; }
+.primary { background: var(--torch); color: #1a1208; border-color: var(--torch); font-weight: 700; }
+.primary:hover { filter: brightness(1.1); }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.keys { font-size: 12px; color: var(--muted); margin: 0; }
+kbd { font-family: var(--mono); background: #0c0a10; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; color: var(--fg); }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Emberdeep</h1>
+    <p class="tag">Five floors down. One torch. The Hollow King waits at the bottom.</p>
+  </header>
+
+  <div class="game">
+    <div>
+      <div class="stage" id="stage">
+        <canvas id="cv" aria-label="Dungeon map"></canvas>
+        <div class="overlay" id="overlay" hidden>
+          <div>
+            <h2 id="ovTitle">You died</h2>
+            <p id="ovText"></p>
+            <button class="primary" id="ovBtn">Start a new run</button>
+          </div>
+        </div>
+      </div>
+      <div class="controls" style="margin-top:14px">
+        <div class="pad" aria-label="Movement">
+          <span></span><button data-d="0,-1" aria-label="Move up">▲</button><span></span>
+          <button data-d="-1,0" aria-label="Move left">◀</button><button data-d="0,0" aria-label="Wait a turn">·</button><button data-d="1,0" aria-label="Move right">▶</button>
+          <span></span><button data-d="0,1" aria-label="Move down">▼</button><span></span>
+        </div>
+        <div class="actions">
+          <button id="drink">Drink potion (<span id="potCount">1</span>)</button>
+          <button id="restart">New run</button>
+        </div>
+        <p class="keys"><kbd>WASD</kbd>/<kbd>arrows</kbd> move &amp; attack · <kbd>Q</kbd> drink · <kbd>space</kbd> wait</p>
+      </div>
+    </div>
+
+    <aside class="side">
+      <div class="card">
+        <div class="row"><span class="label">Floor</span><span id="floor">1 / 5</span></div>
+        <div class="row"><span class="label">Health</span><span id="hpText">24 / 24</span></div>
+        <div class="bar hp"><i id="hpBar" style="width:100%"></i></div>
+        <div class="row"><span class="label">Level <span id="lvl">1</span></span><span id="xpText">0 / 10 xp</span></div>
+        <div class="bar xp"><i id="xpBar" style="width:0%"></i></div>
+        <div class="stats">
+          <div class="stat"><b id="atk">4</b><span>Attack</span></div>
+          <div class="stat"><b id="def">1</b><span>Defense</span></div>
+          <div class="stat"><b id="gold">0</b><span>Gold</span></div>
+        </div>
+        <div class="gear">
+          <div>Wielding <em id="weapon">Rusty dagger</em></div>
+          <div>Wearing <em id="armor">Cloth tunic</em></div>
+        </div>
+      </div>
+      <div class="card">
+        <span class="label">Chronicle</span>
+        <ul class="log" id="log"></ul>
+      </div>
+      <div class="card">
+        <span class="label">Bestiary</span>
+        <div class="gear" id="legend"></div>
+        <div class="row" style="font-size:12px;color:var(--muted)"><span>Deepest run</span><span id="best">—</span></div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script>
+(() => {
+const W = 32, H = 20, FINAL = 5, LIGHT = 6.5;
+const MOBS = {
+  rat:      { g: 'r', name: 'cave rat',       hp: 5,  atk: 2, def: 0, xp: 2,  c: '#b89c7a' },
+  bat:      { g: 'b', name: 'ember bat',      hp: 4,  atk: 3, def: 0, xp: 3,  c: '#e0874a', erratic: true },
+  goblin:   { g: 'g', name: 'goblin',         hp: 9,  atk: 4, def: 1, xp: 5,  c: '#86b86f' },
+  skeleton: { g: 's', name: 'skeleton',       hp: 13, atk: 5, def: 2, xp: 8,  c: '#e6e2d3' },
+  wraith:   { g: 'W', name: 'wraith',         hp: 17, atk: 7, def: 2, xp: 12, c: '#9a8cf0' },
+  king:     { g: 'K', name: 'the Hollow King', hp: 48, atk: 9, def: 4, xp: 0,  c: '#f2c14e', boss: true },
+};
+const POOLS = { 1: ['rat','rat','bat'], 2: ['rat','bat','goblin'], 3: ['bat','goblin','skeleton'], 4: ['goblin','skeleton','wraith'], 5: ['skeleton','wraith'] };
+const WEAPONS = [{ n: 'Iron shortsword', v: 2 }, { n: 'Ember axe', v: 2 }, { n: 'Moonsteel blade', v: 3 }, { n: 'Kingsbane', v: 3 }];
+const ARMORS = [{ n: 'Leather jerkin', v: 1 }, { n: 'Chain hauberk', v: 1 }, { n: 'Obsidian plate', v: 2 }, { n: 'Warden’s aegis', v: 2 }];
+const ITEM_LOOK = { potion: { g: '!', c: '#de5561' }, gold: { g: '$', c: '#f2c14e' }, weapon: { g: ')', c: '#7fb3d9' }, armor: { g: '[', c: '#7fb3d9' } };
+
+const $ = id => document.getElementById(id);
+const rnd = n => Math.floor(Math.random() * n);
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+let S, floaters = [], shake = 0;
+
+function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
+
+function newGame() {
+  S = { depth: 1, over: null, turn: 0, log: [], enraged: false,
+    p: { x: 0, y: 0, hp: 24, maxHp: 24, atk: 4, def: 1, lvl: 1, xp: 0, gold: 0, potions: 1, weapon: 'Rusty dagger', armor: 'Cloth tunic' } };
+  floaters = [];
+  genFloor();
+  log('You light your torch and step into the Emberdeep.', 'info');
+  $('overlay').hidden = true;
+  ui();
+}
+
+function genFloor() {
+  const map = Array.from({ length: H }, () => Array(W).fill(1));
+  const rooms = [];
+  for (let t = 0; t < 300 && rooms.length < 9; t++) {
+    const w = 4 + rnd(5), h = 3 + rnd(3), x = 1 + rnd(W - w - 2), y = 1 + rnd(H - h - 2);
+    if (rooms.some(r => x <= r.x + r.w && x + w >= r.x && y <= r.y + r.h && y + h >= r.y)) continue;
+    rooms.push({ x, y, w, h, cx: x + (w >> 1), cy: y + (h >> 1) });
+  }
+  rooms.sort((a, b) => a.cx - b.cx);
+  for (const r of rooms) for (let j = r.y; j < r.y + r.h; j++) for (let i = r.x; i < r.x + r.w; i++) map[j][i] = 0;
+  const hl = (x1, x2, y) => { for (let x = Math.min(x1, x2); x <= Math.max(x1, x2); x++) map[y][x] = 0; };
+  const vl = (y1, y2, x) => { for (let y = Math.min(y1, y2); y <= Math.max(y1, y2); y++) map[y][x] = 0; };
+  for (let i = 1; i < rooms.length; i++) {
+    const a = rooms[i - 1], b = rooms[i];
+    if (Math.random() < .5) { hl(a.cx, b.cx, a.cy); vl(a.cy, b.cy, b.cx); } else { vl(a.cy, b.cy, a.cx); hl(a.cx, b.cx, b.cy); }
+  }
+  S.map = map; S.rooms = rooms; S.mobs = []; S.items = [];
+  S.seen = Array.from({ length: H }, () => Array(W).fill(false));
+  const first = rooms[0], last = rooms[rooms.length - 1];
+  S.p.x = first.cx; S.p.y = first.cy;
+  S.stairs = S.depth < FINAL ? { x: last.cx, y: last.cy } : null;
+
+  const freeIn = r => {
+    for (let t = 0; t < 30; t++) {
+      const x = r.x + rnd(r.w), y = r.y + rnd(r.h);
+      if (!occupied(x, y) && !(S.stairs && S.stairs.x === x && S.stairs.y === y)) return { x, y };
+    }
+    return null;
+  };
+  const pool = POOLS[S.depth];
+  for (let i = 1; i < rooms.length; i++) {
+    const n = 1 + rnd(2) + (S.depth >= 3 ? rnd(2) : 0);
+    for (let k = 0; k < n; k++) { const at = freeIn(rooms[i]); if (at) spawn(pool[rnd(pool.length)], at); }
+  }
+  if (S.depth === FINAL) { spawn('king', { x: last.cx, y: last.cy }); log('A cold crown glints in the dark. The Hollow King is here.', 'hurt'); }
+  const drop = (k, extra) => { const at = freeIn(rooms[1 + rnd(rooms.length - 1)] || first); if (at) S.items.push({ ...at, k, ...extra }); };
+  drop('potion'); if (Math.random() < .6) drop('potion');
+  for (let i = 0; i < 3; i++) drop('gold', { v: 4 + rnd(6) * S.depth });
+  if (S.depth < FINAL) drop(S.depth % 2 ? 'weapon' : 'armor', S.depth % 2 ? WEAPONS[(S.depth - 1) >> 1] : ARMORS[(S.depth - 1) >> 1]);
+  if (S.depth === 4) drop('weapon', WEAPONS[3]);
+  fov();
+}
+
+function spawn(type, at) {
+  const d = MOBS[type], scale = d.boss ? 0 : Math.max(0, S.depth - 2);
+  S.mobs.push({ type, ...at, hp: d.hp + scale * 2, maxHp: d.hp + scale * 2, atk: d.atk + (scale >> 1), def: d.def, awake: false });
+}
+
+const mobAt = (x, y) => S.mobs.find(m => m.hp > 0 && m.x === x && m.y === y);
+const occupied = (x, y) => S.map[y][x] === 1 || mobAt(x, y) || (S.p.x === x && S.p.y === y);
+
+function los(x0, y0, x1, y1) {
+  let dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, e = dx + dy;
+  while (true) {
+    if (x0 === x1 && y0 === y1) return true;
+    if (S.map[y0][x0] === 1 && !(x0 === S.p.x && y0 === S.p.y)) return false;
+    const e2 = 2 * e;
+    if (e2 >= dy) { e += dy; x0 += sx; }
+    if (e2 <= dx) { e += dx; y0 += sy; }
+  }
+}
+
+function fov() {
+  S.vis = new Set();
+  const { x: px, y: py } = S.p, R = Math.ceil(LIGHT);
+  for (let y = Math.max(0, py - R); y <= Math.min(H - 1, py + R); y++)
+    for (let x = Math.max(0, px - R); x <= Math.min(W - 1, px + R); x++)
+      if (Math.hypot(x - px, y - py) <= LIGHT && los(px, py, x, y)) { S.vis.add(y * W + x); S.seen[y][x] = true; }
+}
+
+function log(msg, cls) { S.log.unshift({ msg, cls }); S.log.length = Math.min(S.log.length, 9); }
+function float(x, y, text, color) { floaters.push({ x, y, text, color, t: performance.now() }); }
+
+function act(dx, dy) {
+  if (S.over) return;
+  const p = S.p;
+  if (dx || dy) {
+    const nx = p.x + dx, ny = p.y + dy;
+    const m = mobAt(nx, ny);
+    if (m) attackMob(m);
+    else if (S.map[ny][nx] === 1) return;
+    else { p.x = nx; p.y = ny; pickup(); }
+    if (S.stairs && p.x === S.stairs.x && p.y === S.stairs.y) { descend(); return; }
+  }
+  endTurn();
+}
+
+function endTurn() {
+  mobsAct();
+  S.turn++;
+  fov();
+  ui();
+}
+
+function attackMob(m) {
+  const d = MOBS[m.type], p = S.p;
+  let dmg = Math.max(1, p.atk + rnd(3) - 1 - m.def);
+  const crit = Math.random() < .12;
+  if (crit) dmg *= 2;
+  m.hp -= dmg; m.awake = true;
+  float(m.x, m.y, (crit ? '!' : '') + dmg, crit ? '#f2c14e' : '#f2a649');
+  if (m.hp <= 0) {
+    if (d.boss) { log('The Hollow King crumbles to ash. The Emberdeep is free.', 'good'); win(); return; }
+    p.xp += d.xp;
+    log(`You slay the ${d.name}. +${d.xp} xp`, 'hit');
+    if (Math.random() < .3) S.items.push({ x: m.x, y: m.y, k: 'gold', v: 2 + rnd(4) * S.depth });
+    while (p.xp >= p.lvl * 10) levelUp();
+  } else log(`You ${crit ? 'crit' : 'hit'} the ${d.name} for ${dmg}.`, 'hit');
+}
+
+function levelUp() {
+  const p = S.p;
+  p.xp -= p.lvl * 10; p.lvl++;
+  p.maxHp += 6; p.atk += 1; if (p.lvl % 2) p.def += 1;
+  p.hp = p.maxHp;
+  log(`Level ${p.lvl}! You feel the ember burn brighter.`, 'good');
+  float(p.x, p.y, 'LV UP', '#86b86f');
+}
+
+function pickup() {
+  const p = S.p, i = S.items.findIndex(it => it.x === p.x && it.y === p.y);
+  if (i < 0) return;
+  const it = S.items.splice(i, 1)[0];
+  if (it.k === 'potion') { p.potions++; log('You pocket a healing draught.', 'good'); }
+  if (it.k === 'gold') { p.gold += it.v; log(`You scoop up ${it.v} gold.`, 'good'); float(p.x, p.y, '+' + it.v, '#f2c14e'); }
+  if (it.k === 'weapon') { p.atk += it.v; p.weapon = it.n; log(`You wield the ${it.n}. Attack +${it.v}.`, 'good'); }
+  if (it.k === 'armor') { p.def += it.v; p.armor = it.n; log(`You don the ${it.n}. Defense +${it.v}.`, 'good'); }
+}
+
+function drink() {
+  const p = S.p;
+  if (S.over || !p.potions || p.hp >= p.maxHp) return;
+  const heal = Math.min(p.maxHp - p.hp, 12 + S.depth * 3);
+  p.potions--; p.hp += heal;
+  log(`The draught warms you. +${heal} health.`, 'good');
+  float(p.x, p.y, '+' + heal, '#86b86f');
+  endTurn();
+}
+
+function descend() {
+  S.depth++;
+  const best = +store('emberdeep-best') || 0;
+  if (S.depth > best) store('emberdeep-best', S.depth);
+  genFloor();
+  log(S.depth === FINAL ? 'The final floor. The air tastes of ash.' : `You descend to floor ${S.depth}. It grows colder.`, 'info');
+  ui();
+}
+
+function mobsAct() {
+  const p = S.p;
+  for (const m of S.mobs) {
+    if (m.hp <= 0 || S.over) continue;
+    const d = MOBS[m.type];
+    if (!m.awake && S.vis.has(m.y * W + m.x)) m.awake = true;
+    if (!m.awake) continue;
+    if (d.boss && !S.enraged && m.hp <= m.maxHp / 2) { S.enraged = true; m.atk += 3; log('The Hollow King roars. His blows grow heavier!', 'hurt'); }
+    const dist = Math.abs(m.x - p.x) + Math.abs(m.y - p.y);
+    if (dist === 1 && !(d.erratic && Math.random() < .3)) { attackPlayer(m); continue; }
+    let steps = [[1,0],[-1,0],[0,1],[0,-1]];
+    if (d.erratic && Math.random() < .5) steps.sort(() => Math.random() - .5);
+    else steps.sort((a, b) => (Math.abs(m.x + a[0] - p.x) + Math.abs(m.y + a[1] - p.y)) - (Math.abs(m.x + b[0] - p.x) + Math.abs(m.y + b[1] - p.y)));
+    for (const [sx, sy] of steps) {
+      const nx = m.x + sx, ny = m.y + sy;
+      if (!occupied(nx, ny)) { m.x = nx; m.y = ny; break; }
+    }
+  }
+}
+
+function attackPlayer(m) {
+  const d = MOBS[m.type], p = S.p;
+  if (Math.random() < .08) { log(`You dodge the ${d.name}.`, ''); float(p.x, p.y, 'miss', '#968aa0'); return; }
+  const dmg = Math.max(1, m.atk + rnd(3) - 1 - p.def);
+  p.hp -= dmg;
+  if (!reduceMotion) shake = 6;
+  float(p.x, p.y, '-' + dmg, '#de5561');
+  log(`The ${d.name} hits you for ${dmg}.`, 'hurt');
+  if (p.hp <= 0) { p.hp = 0; die(d.name); }
+}
+
+function die(by) {
+  S.over = 'dead';
+  showOverlay('Your torch goes out', `Slain by ${by} on floor ${S.depth} at level ${S.p.lvl}, carrying ${S.p.gold} gold.`, 'var(--blood)');
+}
+function win() {
+  S.over = 'won';
+  store('emberdeep-best', 'won');
+  showOverlay('The Emberdeep is free', `You felled the Hollow King at level ${S.p.lvl} in ${S.turn + 1} turns, with ${S.p.gold} gold to your name.`, 'var(--torch)');
+}
+function showOverlay(title, text, color) {
+  $('ovTitle').textContent = title; $('ovTitle').style.color = color;
+  $('ovText').textContent = text;
+  $('overlay').hidden = false;
+  ui();
+  $('ovBtn').focus();
+}
+
+function ui() {
+  const p = S.p;
+  $('floor').textContent = `${S.depth} / ${FINAL}`;
+  $('hpText').textContent = `${p.hp} / ${p.maxHp}`;
+  $('hpBar').style.width = (100 * p.hp / p.maxHp) + '%';
+  $('lvl').textContent = p.lvl;
+  $('xpText').textContent = `${p.xp} / ${p.lvl * 10} xp`;
+  $('xpBar').style.width = (100 * p.xp / (p.lvl * 10)) + '%';
+  $('atk').textContent = p.atk; $('def').textContent = p.def; $('gold').textContent = p.gold;
+  $('weapon').textContent = p.weapon; $('armor').textContent = p.armor;
+  $('potCount').textContent = p.potions;
+  $('drink').disabled = !p.potions || p.hp >= p.maxHp || !!S.over;
+  const logEl = $('log'); logEl.textContent = '';
+  for (const l of S.log) { const li = document.createElement('li'); li.textContent = l.msg; if (l.cls) li.className = l.cls; logEl.appendChild(li); }
+  const best = store('emberdeep-best');
+  $('best').textContent = best === 'won' ? 'Hollow King slain' : best ? `Floor ${best}` : '—';
+  const seen = new Set(S.mobs.filter(m => m.hp > 0 && S.vis.has(m.y * W + m.x)).map(m => m.type));
+  const leg = $('legend'); leg.textContent = '';
+  const rows = [...seen].map(t => [MOBS[t].g, MOBS[t].c, `${MOBS[t].name} · atk ${MOBS[t].atk}`]);
+  if (!rows.length) rows.push(['@', '#f2a649', 'you · nothing in sight']);
+  rows.push(['!', '#de5561', 'potion'], ['$', '#f2c14e', 'gold'], [')[', '#7fb3d9', 'weapon / armor'], ['>', '#eadfc8', 'stairs down']);
+  for (const [g, c, t] of rows) { const div = document.createElement('div'); div.innerHTML = `<b style="font-family:var(--display);color:${c};display:inline-block;width:2.2em">${g}</b>`; div.append(t); leg.appendChild(div); }
+}
+
+// ---------- rendering ----------
+const cv = $('cv'), ctx = cv.getContext('2d');
+let ts = 20;
+function resize() {
+  const r = $('stage').getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  ts = r.width / W;
+  cv.width = Math.round(r.width * dpr); cv.height = Math.round(ts * H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+new ResizeObserver(resize).observe($('stage'));
+
+function glyph(g, x, y, color, scale = .78) {
+  ctx.font = `700 ${ts * scale}px "Pixelify Sans", "Courier New", monospace`;
+  ctx.fillStyle = color;
+  ctx.fillText(g, x * ts + ts / 2, y * ts + ts / 2 + ts * .04);
+}
+
+function draw(now) {
+  requestAnimationFrame(draw);
+  if (!S) return;
+  const p = S.p;
+  ctx.save();
+  ctx.fillStyle = '#07060a'; ctx.fillRect(0, 0, W * ts, H * ts);
+  if (shake > .2) { ctx.translate((Math.random() - .5) * shake, (Math.random() - .5) * shake); shake *= .85; } else shake = 0;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const flick = reduceMotion ? 0 : Math.sin(now / 130) * .04 + Math.sin(now / 57) * .025;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (!S.seen[y][x]) continue;
+    const vis = S.vis.has(y * W + x);
+    const d = Math.hypot(x - p.x, y - p.y);
+    const light = vis ? Math.max(.28, 1 - d / (LIGHT + 1.5) + flick) : .13;
+    const X = x * ts, Y = y * ts;
+    if (S.map[y][x] === 1) {
+      ctx.fillStyle = `rgba(92,70,78,${light})`; ctx.fillRect(X, Y, ts, ts);
+      ctx.fillStyle = `rgba(150,112,96,${light * .6})`; ctx.fillRect(X, Y, ts, ts * .18);
+    } else {
+      ctx.fillStyle = `rgba(58,44,40,${light})`; ctx.fillRect(X + .5, Y + .5, ts - 1, ts - 1);
+      if ((x * 7 + y * 13) % 5 === 0) { ctx.fillStyle = `rgba(120,95,80,${light * .5})`; ctx.fillRect(X + ts * .45, Y + ts * .45, ts * .1, ts * .1); }
+    }
+  }
+  if (S.stairs && S.seen[S.stairs.y][S.stairs.x]) glyph('>', S.stairs.x, S.stairs.y, S.vis.has(S.stairs.y * W + S.stairs.x) ? '#eadfc8' : '#6b6070');
+  for (const it of S.items) if (S.vis.has(it.y * W + it.x)) { const l = ITEM_LOOK[it.k]; glyph(l.g, it.x, it.y, l.c, .7); }
+  for (const m of S.mobs) {
+    if (m.hp <= 0 || !S.vis.has(m.y * W + m.x)) continue;
+    const d = MOBS[m.type];
+    const bob = reduceMotion ? 0 : Math.sin(now / 200 + m.x) * ts * .03;
+    glyph(d.g, m.x, m.y + bob / ts, (d.boss && S.enraged) ? '#ff7a4a' : d.c, d.boss ? .95 : .78);
+    if (m.hp < m.maxHp) {
+      ctx.fillStyle = '#0c0a10'; ctx.fillRect(m.x * ts + ts * .1, m.y * ts + 1, ts * .8, 3);
+      ctx.fillStyle = '#de5561'; ctx.fillRect(m.x * ts + ts * .1, m.y * ts + 1, ts * .8 * m.hp / m.maxHp, 3);
+    }
+  }
+  // torch glow
+  const gx = p.x * ts + ts / 2, gy = p.y * ts + ts / 2, gr = ts * (LIGHT + 1) * (1 + flick);
+  const grad = ctx.createRadialGradient(gx, gy, 0, gx, gy, gr);
+  grad.addColorStop(0, 'rgba(242,166,73,.22)'); grad.addColorStop(1, 'rgba(242,166,73,0)');
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = grad; ctx.fillRect(gx - gr, gy - gr, gr * 2, gr * 2);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.shadowColor = 'rgba(242,166,73,.8)'; ctx.shadowBlur = ts * .5;
+  glyph('@', p.x, p.y, S.over === 'dead' ? '#6b6070' : '#f2a649', .85);
+  ctx.shadowBlur = 0;
+  // floating numbers
+  floaters = floaters.filter(f => now - f.t < 900);
+  for (const f of floaters) {
+    const k = (now - f.t) / 900;
+    ctx.globalAlpha = 1 - k;
+    ctx.font = `700 ${ts * .6}px "Pixelify Sans", monospace`;
+    ctx.fillStyle = f.color;
+    ctx.fillText(f.text, f.x * ts + ts / 2, f.y * ts - k * ts * .9);
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+// ---------- input ----------
+const KEYS = { ArrowUp: [0,-1], ArrowDown: [0,1], ArrowLeft: [-1,0], ArrowRight: [1,0], w: [0,-1], s: [0,1], a: [-1,0], d: [1,0], k: [0,-1], j: [0,1], h: [-1,0], l: [1,0], ' ': [0,0], '.': [0,0] };
+addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (KEYS[k]) { e.preventDefault(); act(...KEYS[k]); }
+  else if (k === 'q') drink();
+  else if (k === 'r' && S.over) newGame();
+});
+document.querySelectorAll('[data-d]').forEach(b => b.addEventListener('click', () => { const [x, y] = b.dataset.d.split(',').map(Number); act(x, y); }));
+$('drink').onclick = drink;
+$('restart').onclick = newGame;
+$('ovBtn').onclick = newGame;
+
+newGame();
+resize();
+requestAnimationFrame(draw);
+})();
+</script>
+
+</html>
