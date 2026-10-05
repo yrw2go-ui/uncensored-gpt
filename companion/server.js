@@ -1,9 +1,12 @@
 // AI Companion server: zero dependencies, Node 18+.
-// Serves the web UI and proxies LLM / TTS / STT / avatar calls so API keys stay server-side.
+// Serves the web UI, proxies LLM / TTS / STT / avatar calls so API keys stay server-side,
+// and stores characters, user profiles and memories as JSON files in ./data.
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Store } from "./lib/store.js";
+import { resolveProvider, chatRequest, chatJson } from "./lib/llm.js";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, "public");
@@ -11,7 +14,11 @@ const PUBLIC = path.join(ROOT, "public");
 loadEnv(path.join(ROOT, ".env"));
 const PORT = Number(process.env.PORT || 8787);
 const providers = readJson("providers.json");
-const personas = readJson("personas.json");
+const store = new Store(process.env.DATA_DIR || path.join(ROOT, "data"));
+
+const MAX_HISTORY = 40;
+const MAX_FACTS = 200;
+const MAX_BIOMETRIC_SAMPLES = 10;
 
 // ---------- helpers ----------
 function loadEnv(file) {
@@ -28,13 +35,13 @@ function readJson(name) {
   return JSON.parse(fs.readFileSync(path.join(ROOT, name), "utf8"));
 }
 
-function providerKey(p) {
-  return p.apiKeyEnv ? process.env[p.apiKeyEnv] : "none";
-}
-
 function sendJson(res, status, body) {
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(JSON.stringify(body));
+}
+
+function httpError(status, message) {
+  return Object.assign(new Error(message), { status });
 }
 
 async function readBody(req, limit = 25 * 1024 * 1024) {
@@ -42,7 +49,7 @@ async function readBody(req, limit = 25 * 1024 * 1024) {
   let size = 0;
   for await (const c of req) {
     size += c.length;
-    if (size > limit) throw new Error("Request body too large");
+    if (size > limit) throw httpError(413, "Request body too large");
     chunks.push(c);
   }
   return Buffer.concat(chunks);
@@ -79,21 +86,283 @@ function serveStatic(req, res) {
   fs.createReadStream(file).pipe(res);
 }
 
-// ---------- API handlers ----------
+// ---------- characters ----------
+const HAIR_STYLES = ["none", "short", "long", "bun", "spiky", "curly"];
+const TRAITS = ["warmth", "humor", "sarcasm", "energy", "curiosity", "formality"];
+
+function hex(v, fallback) {
+  return /^#[0-9a-f]{6}$/i.test(v || "") ? v : fallback;
+}
+
+function str(v, max = 2000) {
+  return typeof v === "string" ? v.trim().slice(0, max) : "";
+}
+
+/** Fills defaults and clamps values so hand-edited or AI-generated characters are always usable. */
+function normalizeCharacter(c = {}) {
+  const look = c.look || {};
+  const voice = c.voice || {};
+  const traits = {};
+  for (const t of TRAITS) traits[t] = Math.max(0, Math.min(10, Math.round(Number(c.traits?.[t] ?? 5))));
+  return {
+    id: str(c.id, 40) || Store.id(),
+    name: str(c.name, 60) || "Unnamed",
+    tagline: str(c.tagline, 120),
+    personality: str(c.personality),
+    backstory: str(c.backstory),
+    speakingStyle: str(c.speakingStyle),
+    likes: str(c.likes, 500),
+    dislikes: str(c.dislikes, 500),
+    rules: str(c.rules),
+    greeting: str(c.greeting, 300),
+    traits,
+    look: {
+      avatar: ["cartoon", "vrm", "simli"].includes(look.avatar) ? look.avatar : "cartoon",
+      skin: hex(look.skin, "#f2c9a5"),
+      hair: hex(look.hair, "#3b2a20"),
+      hairStyle: HAIR_STYLES.includes(look.hairStyle) ? look.hairStyle : "short",
+      eyes: hex(look.eyes, "#3d3d3d"),
+      shirt: hex(look.shirt, "#7c5cff"),
+      glasses: Boolean(look.glasses),
+      vrmUrl: str(look.vrmUrl, 500),
+      simliFaceId: str(look.simliFaceId, 100),
+    },
+    voice: { tts: str(voice.tts, 20), voice: str(voice.voice, 100) },
+    updatedAt: Date.now(),
+  };
+}
+
+function getCharacters() {
+  let list = store.read("characters", null);
+  if (!list) list = store.write("characters", readJson("characters.seed.json").map(normalizeCharacter));
+  return list;
+}
+
+const CHARACTER_SCHEMA = `{
+  "name": "first name",
+  "tagline": "a few words, e.g. 'retired pirate who loves gardening'",
+  "personality": "2-3 sentences",
+  "backstory": "2-4 sentences",
+  "speakingStyle": "how they talk: vocabulary, rhythm, catchphrases",
+  "likes": "comma separated",
+  "dislikes": "comma separated",
+  "rules": "any extra behaviour rules, may be empty",
+  "greeting": "the one sentence they say when a call starts",
+  "traits": { ${TRAITS.map((t) => `"${t}": 0-10`).join(", ")} },
+  "look": {
+    "skin": "#hex", "hair": "#hex", "hairStyle": one of ${JSON.stringify(HAIR_STYLES)},
+    "eyes": "#hex", "shirt": "#hex", "glasses": true|false
+  }
+}`;
+
+async function generateCharacter(req, res) {
+  const { description, base, instruction, provider, model } = await readJsonBody(req);
+  const p = resolveProvider(providers, provider);
+  const task = base
+    ? `Here is an existing character as JSON:\n${JSON.stringify(base)}\n\nChange it according to this instruction, keeping everything else the same: "${str(instruction)}"`
+    : `Create a new character from this description: "${str(description)}"`;
+  const out = await chatJson(
+    p,
+    model,
+    [
+      {
+        role: "system",
+        content: `You design characters for an AI video-call companion app. The character will talk to the user live, out loud, so give them a vivid, specific personality and a distinctive way of speaking. Reply with ONLY a JSON object in exactly this shape:\n${CHARACTER_SCHEMA}`,
+      },
+      { role: "user", content: task },
+    ],
+    { temperature: 0.9 },
+  );
+  // Keep id / avatar / voice settings the user already chose when refining.
+  const merged = base
+    ? { ...base, ...out, id: base.id, look: { ...base.look, ...out.look, avatar: base.look?.avatar, vrmUrl: base.look?.vrmUrl, simliFaceId: base.look?.simliFaceId }, voice: base.voice }
+    : { ...out, id: undefined };
+  sendJson(res, 200, normalizeCharacter(merged));
+}
+
+async function saveCharacter(req, res) {
+  const c = normalizeCharacter(await readJsonBody(req));
+  const list = getCharacters();
+  const i = list.findIndex((x) => x.id === c.id);
+  if (i >= 0) list[i] = c;
+  else list.push(c);
+  store.write("characters", list);
+  sendJson(res, 200, c);
+}
+
+function deleteCharacter(req, res, id) {
+  const list = getCharacters().filter((c) => c.id !== id);
+  if (!list.length) throw httpError(400, "Keep at least one character");
+  store.write("characters", list);
+  for (const f of fs.readdirSync(store.dir)) if (f.startsWith("rel_") && f.endsWith(`_${id}.json`)) fs.rmSync(path.join(store.dir, f));
+  sendJson(res, 200, { ok: true });
+}
+
+// ---------- user profiles (name, face & voice prints) ----------
+function getProfiles() {
+  return store.read("profiles", []);
+}
+
+function createProfile(name) {
+  const profiles = getProfiles();
+  const p = { id: Store.id(), name: str(name, 60) || "Friend", faces: [], voices: [], createdAt: Date.now() };
+  profiles.push(p);
+  store.write("profiles", profiles);
+  return p;
+}
+
+function vector(v, len) {
+  return Array.isArray(v) && v.length === len && v.every(Number.isFinite) ? v.map((x) => Math.round(x * 1e5) / 1e5) : null;
+}
+
+async function updateProfile(req, res, id) {
+  const body = await readJsonBody(req);
+  const profiles = getProfiles();
+  const p = profiles.find((x) => x.id === id);
+  if (!p) throw httpError(404, "No such profile");
+  if (body.name) p.name = str(body.name, 60);
+  const face = vector(body.addFace, 128);
+  if (face) p.faces = [...p.faces, face].slice(-MAX_BIOMETRIC_SAMPLES);
+  const voice = Array.isArray(body.addVoice) ? vector(body.addVoice, body.addVoice.length) : null;
+  if (voice) p.voices = [...p.voices, voice].slice(-MAX_BIOMETRIC_SAMPLES);
+  if (body.clearFaces) p.faces = [];
+  if (body.clearVoices) p.voices = [];
+  store.write("profiles", profiles);
+  sendJson(res, 200, p);
+}
+
+function deleteProfile(req, res, id) {
+  store.write("profiles", getProfiles().filter((p) => p.id !== id));
+  for (const f of fs.readdirSync(store.dir)) {
+    if (f.startsWith(`facts_${id}.`) || f.startsWith(`rel_${id}_`)) fs.rmSync(path.join(store.dir, f));
+  }
+  sendJson(res, 200, { ok: true });
+}
+
+// ---------- memory ----------
+// facts_<profile>            facts about the person, shared by every character
+// rel_<profile>_<character>  that character's relationship summary + recent conversation
+const factsKey = (profile) => `facts_${profile}`;
+const relKey = (profile, character) => `rel_${profile}_${character}`;
+
+function getMemory(profile, character) {
+  const facts = store.read(factsKey(profile), { facts: [] }).facts;
+  const rel = store.read(relKey(profile, character), { summary: "", history: [], lastSeen: 0, calls: 0 });
+  return { facts, ...rel };
+}
+
+function memoryParams(req) {
+  const q = new URL(req.url, "http://x").searchParams;
+  const profile = q.get("profile") || "guest";
+  const character = q.get("character");
+  if (!character) throw httpError(400, "character is required");
+  return { profile, character, scope: q.get("scope") };
+}
+
+function readMemory(req, res) {
+  const { profile, character } = memoryParams(req);
+  sendJson(res, 200, getMemory(profile, character));
+}
+
+async function writeMemory(req, res) {
+  const { profile = "guest", character, history, facts, summary, callStarted } = await readJsonBody(req);
+  if (!character) throw httpError(400, "character is required");
+  const rel = store.read(relKey(profile, character), { summary: "", history: [], lastSeen: 0, calls: 0 });
+  if (Array.isArray(history)) {
+    rel.history = history
+      .filter((m) => ["user", "assistant"].includes(m.role) && typeof m.content === "string")
+      .slice(-MAX_HISTORY);
+  }
+  if (typeof summary === "string") rel.summary = str(summary);
+  if (callStarted) rel.calls = (rel.calls || 0) + 1;
+  rel.lastSeen = Date.now();
+  store.write(relKey(profile, character), rel);
+  if (Array.isArray(facts)) store.write(factsKey(profile), { facts: facts.map((f) => str(f, 300)).filter(Boolean).slice(-MAX_FACTS) });
+  sendJson(res, 200, getMemory(profile, character));
+}
+
+function forgetMemory(req, res) {
+  const { profile, character, scope } = memoryParams(req);
+  store.remove(relKey(profile, character));
+  if (scope === "all") store.remove(factsKey(profile));
+  sendJson(res, 200, getMemory(profile, character));
+}
+
+/** Asks the LLM what it learned about the user from recent turns, then merges it into memory. */
+async function learn(req, res) {
+  const { profile = "guest", character: characterId, turns = [], provider, model } = await readJsonBody(req);
+  const character = getCharacters().find((c) => c.id === characterId);
+  if (!character) throw httpError(404, "No such character");
+  const convo = turns
+    .filter((m) => typeof m.content === "string")
+    .map((m) => `${m.role === "user" ? "USER" : character.name.toUpperCase()}: ${m.content}`)
+    .join("\n");
+  if (!convo.trim()) return sendJson(res, 200, { memory: getMemory(profile, characterId) });
+
+  const mem = getMemory(profile, characterId);
+  const p = resolveProvider(providers, provider);
+  const out = await chatJson(
+    p,
+    model,
+    [
+      {
+        role: "system",
+        content: `You maintain long-term memory for ${character.name}, an AI companion, about the human they talk to.
+From the new conversation, extract durable facts about the USER worth remembering next time: name, preferences, people and pets in their life, job, plans, events, feelings, inside jokes. Skip trivia about the conversation itself and anything only the character said.
+Reply with ONLY JSON:
+{"user_name": "their first name if they said it, else null",
+ "add": ["new short facts written in third person, e.g. 'Has a dog named Biscuit'"],
+ "remove": [indexes of KNOWN FACTS that are now wrong or duplicated],
+ "relationship_summary": "2-4 sentences, from ${character.name}'s point of view, about your relationship and what you've talked about so far"}`,
+      },
+      {
+        role: "user",
+        content: `KNOWN FACTS:\n${mem.facts.map((f, i) => `${i}. ${f}`).join("\n") || "(none)"}\n\nPREVIOUS RELATIONSHIP SUMMARY:\n${mem.summary || "(first conversation)"}\n\nNEW CONVERSATION:\n${convo}`,
+      },
+    ],
+    { temperature: 0.2 },
+  );
+
+  const remove = new Set((out.remove || []).map(Number));
+  const facts = mem.facts.filter((_, i) => !remove.has(i));
+  for (const f of out.add || []) {
+    const s = str(f, 300);
+    if (s && !facts.some((x) => x.toLowerCase() === s.toLowerCase())) facts.push(s);
+  }
+
+  let targetProfile = profile;
+  let createdProfile = null;
+  const userName = str(out.user_name, 60);
+  if (profile === "guest" && userName && userName.toLowerCase() !== "null") {
+    // A stranger told us their name: give them a profile and move what we learned onto it.
+    createdProfile = createProfile(userName);
+    targetProfile = createdProfile.id;
+    const guestRel = store.read(relKey("guest", characterId), null);
+    if (guestRel) store.write(relKey(targetProfile, characterId), guestRel);
+    store.remove(relKey("guest", characterId));
+    store.remove(factsKey("guest"));
+  }
+
+  store.write(factsKey(targetProfile), { facts: facts.slice(-MAX_FACTS) });
+  const rel = store.read(relKey(targetProfile, characterId), { summary: "", history: [], lastSeen: 0, calls: 0 });
+  if (out.relationship_summary) rel.summary = str(out.relationship_summary);
+  store.write(relKey(targetProfile, characterId), rel);
+
+  sendJson(res, 200, { memory: getMemory(targetProfile, characterId), createdProfile, learned: out.add || [] });
+}
+
+// ---------- LLM / voice / avatar proxies ----------
 function getConfig(req, res) {
   sendJson(res, 200, {
     providers: Object.entries(providers).map(([id, p]) => ({
       id,
       name: p.name,
       models: p.models,
-      configured: Boolean(providerKey(p)),
+      configured: Boolean(p.apiKeyEnv ? process.env[p.apiKeyEnv] : true),
     })),
-    personas,
     tts: {
       elevenlabs: Boolean(process.env.ELEVENLABS_API_KEY),
       openai: Boolean(process.env.TTS_BASE_URL),
-      elevenlabsVoice: process.env.ELEVENLABS_VOICE_ID || "",
-      openaiVoice: process.env.TTS_VOICE || "alloy",
     },
     stt: { server: Boolean(process.env.STT_BASE_URL) },
     simli: { configured: Boolean(process.env.SIMLI_API_KEY), faceId: process.env.SIMLI_FACE_ID || "" },
@@ -102,13 +371,9 @@ function getConfig(req, res) {
 }
 
 async function listModels(req, res) {
-  const id = new URL(req.url, "http://x").searchParams.get("provider");
-  const p = providers[id];
-  if (!p) return sendJson(res, 400, { error: "Unknown provider" });
-  const r = await fetch(`${p.baseURL}/models`, {
-    headers: { Authorization: `Bearer ${providerKey(p)}` },
-  });
-  if (!r.ok) return sendJson(res, 502, { error: await upstreamError(r) });
+  const p = resolveProvider(providers, new URL(req.url, "http://x").searchParams.get("provider"));
+  const r = await fetch(`${p.baseURL}/models`, { headers: { Authorization: `Bearer ${p.key}` } });
+  if (!r.ok) throw httpError(502, await upstreamError(r));
   const data = await r.json();
   const models = (data.data || data.models || []).map((m) => m.id || m.name).filter(Boolean).sort();
   sendJson(res, 200, { models });
@@ -117,27 +382,19 @@ async function listModels(req, res) {
 // Streams the reply back as plain text chunks (reasoning tokens are dropped).
 async function chat(req, res) {
   const { provider, model, messages, temperature = 0.8, maxTokens = 400 } = await readJsonBody(req);
-  const p = providers[provider];
-  if (!p) return sendJson(res, 400, { error: "Unknown provider" });
-  const key = providerKey(p);
-  if (!key) return sendJson(res, 400, { error: `Set ${p.apiKeyEnv} in companion/.env` });
+  const p = resolveProvider(providers, provider);
 
   const controller = new AbortController();
   res.on("close", () => controller.abort());
 
   let r;
   try {
-    r = await fetch(`${p.baseURL}/chat/completions`, {
-      method: "POST",
-      signal: controller.signal,
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-      body: JSON.stringify({ model, messages, temperature, max_tokens: maxTokens, stream: true }),
-    });
+    r = await chatRequest(p, { model, messages, temperature, max_tokens: maxTokens, stream: true }, controller.signal);
   } catch (e) {
     if (controller.signal.aborted) return;
-    return sendJson(res, 502, { error: String(e) });
+    throw httpError(502, String(e));
   }
-  if (!r.ok) return sendJson(res, 502, { error: await upstreamError(r) });
+  if (!r.ok) throw httpError(502, await upstreamError(r));
 
   res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-cache" });
   const decoder = new TextDecoder();
@@ -171,7 +428,7 @@ async function tts(req, res) {
   let r;
   if (provider === "elevenlabs") {
     const voiceId = voice || process.env.ELEVENLABS_VOICE_ID;
-    if (!voiceId) return sendJson(res, 400, { error: "Set ELEVENLABS_VOICE_ID or pick a voice" });
+    if (!voiceId) throw httpError(400, "Set ELEVENLABS_VOICE_ID or give the character a voice ID");
     r = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`,
       {
@@ -192,15 +449,15 @@ async function tts(req, res) {
       }),
     });
   } else {
-    return sendJson(res, 400, { error: "Unknown TTS provider" });
+    throw httpError(400, "Unknown TTS provider");
   }
-  if (!r.ok) return sendJson(res, 502, { error: await upstreamError(r) });
+  if (!r.ok) throw httpError(502, await upstreamError(r));
   res.writeHead(200, { "Content-Type": r.headers.get("content-type") || "audio/mpeg" });
   res.end(Buffer.from(await r.arrayBuffer()));
 }
 
 async function stt(req, res) {
-  if (!process.env.STT_BASE_URL) return sendJson(res, 400, { error: "Set STT_BASE_URL" });
+  if (!process.env.STT_BASE_URL) throw httpError(400, "Set STT_BASE_URL");
   const audio = await readBody(req);
   const type = req.headers["content-type"] || "audio/webm";
   const form = new FormData();
@@ -211,7 +468,7 @@ async function stt(req, res) {
     headers: { Authorization: `Bearer ${process.env.STT_API_KEY}` },
     body: form,
   });
-  if (!r.ok) return sendJson(res, 502, { error: await upstreamError(r) });
+  if (!r.ok) throw httpError(502, await upstreamError(r));
   const data = await r.json();
   sendJson(res, 200, { text: data.text || "" });
 }
@@ -219,7 +476,7 @@ async function stt(req, res) {
 // Mints a short-lived Simli session so the browser never sees SIMLI_API_KEY.
 async function simliSession(req, res) {
   const apiKey = process.env.SIMLI_API_KEY;
-  if (!apiKey) return sendJson(res, 400, { error: "Set SIMLI_API_KEY in companion/.env" });
+  if (!apiKey) throw httpError(400, "Set SIMLI_API_KEY in companion/.env");
   const { faceId } = await readJsonBody(req);
   const headers = { "Content-Type": "application/json", "x-simli-api-key": apiKey };
   const tokenRes = await fetch("https://api.simli.ai/compose/token", {
@@ -233,7 +490,7 @@ async function simliSession(req, res) {
       model: "fasttalk",
     }),
   });
-  if (!tokenRes.ok) return sendJson(res, 502, { error: await upstreamError(tokenRes) });
+  if (!tokenRes.ok) throw httpError(502, await upstreamError(tokenRes));
   const { session_token } = await tokenRes.json();
 
   let iceServers = [{ urls: ["stun:stun.l.google.com:19302"] }];
@@ -245,24 +502,47 @@ async function simliSession(req, res) {
   sendJson(res, 200, { sessionToken: session_token, iceServers });
 }
 
-const routes = {
-  "GET /api/config": getConfig,
-  "GET /api/models": listModels,
-  "POST /api/chat": chat,
-  "POST /api/tts": tts,
-  "POST /api/stt": stt,
-  "POST /api/simli/session": simliSession,
-};
+// ---------- routing ----------
+const routes = [
+  ["GET", "/api/config", getConfig],
+  ["GET", "/api/models", listModels],
+  ["POST", "/api/chat", chat],
+  ["POST", "/api/tts", tts],
+  ["POST", "/api/stt", stt],
+  ["POST", "/api/simli/session", simliSession],
+  ["GET", "/api/characters", (req, res) => sendJson(res, 200, getCharacters())],
+  ["POST", "/api/characters", saveCharacter],
+  ["POST", "/api/characters/generate", generateCharacter],
+  ["DELETE", /^\/api\/characters\/([\w-]+)$/, deleteCharacter],
+  ["GET", "/api/profiles", (req, res) => sendJson(res, 200, getProfiles())],
+  ["POST", "/api/profiles", async (req, res) => sendJson(res, 200, createProfile((await readJsonBody(req)).name))],
+  ["PUT", /^\/api\/profiles\/([\w-]+)$/, updateProfile],
+  ["DELETE", /^\/api\/profiles\/([\w-]+)$/, deleteProfile],
+  ["GET", "/api/memory", readMemory],
+  ["PUT", "/api/memory", writeMemory],
+  ["DELETE", "/api/memory", forgetMemory],
+  ["POST", "/api/memory/learn", learn],
+];
+
+function match(method, pathname) {
+  for (const [m, p, handler] of routes) {
+    if (m !== method) continue;
+    if (typeof p === "string" && p === pathname) return [handler, []];
+    const hit = typeof p !== "string" && pathname.match(p);
+    if (hit) return [handler, hit.slice(1)];
+  }
+  return null;
+}
 
 http
   .createServer(async (req, res) => {
-    const route = routes[`${req.method} ${new URL(req.url, "http://x").pathname}`];
-    if (!route) return serveStatic(req, res);
+    const found = match(req.method, new URL(req.url, "http://x").pathname);
+    if (!found) return serveStatic(req, res);
     try {
-      await route(req, res);
+      await found[0](req, res, ...found[1]);
     } catch (e) {
-      console.error(req.url, e);
-      if (!res.headersSent) sendJson(res, 500, { error: String(e.message || e) });
+      if (!e.status) console.error(req.method, req.url, e);
+      if (!res.headersSent) sendJson(res, e.status || 500, { error: String(e.message || e) });
       else res.end();
     }
   })

@@ -18,6 +18,8 @@ npm start                   # no npm install needed, Node 18+
 
 Open http://localhost:8787 in **Chrome or Edge**, click **Start call** and allow the mic. Headphones stop it from hearing (and interrupting) itself.
 
+**One-way calls:** in Settings, untick "Start with my mic on" and "Start with my camera on". The character is on video and talks to you; you type in the box under the video. You can switch your mic or camera on or off at any point.
+
 With only an Atlas Cloud key you get the cartoon and 3D avatars, the browser's free voice and free speech recognition. Adding more keys unlocks better voices and the photoreal face.
 
 ## The three faces
@@ -37,9 +39,27 @@ The browser voice can't be captured as audio. So with it, the cartoon and 3D mou
 - Pick a **provider** and a **model** in the side panel. You can switch mid-conversation; the memory carries over.
 - **Load all** fetches every model that provider offers (`GET /v1/models`), so you can try any of them. You can also type any model ID by hand.
 - Add more providers by adding an entry to `providers.json` with `baseURL`, `apiKeyEnv` and `models`. Groq, Together, OpenRouter, a local Ollama and LM Studio all work.
-- **Personas** (`personas.json`) are starting system prompts. Edit the prompt live in the panel.
 - `<think>…</think>` reasoning is stripped before speaking, so reasoning models work too.
 - **Let it see me** attaches a webcam snapshot to each message. Use it only with a vision-capable model.
+
+## Characters (Character tab)
+
+- **Create with AI:** describe anyone ("a retired pirate grandma who loves gardening"). The selected LLM writes their name, personality, backstory, speaking style, likes and dislikes, greeting, trait dials and cartoon look (skin, hair and style, eyes, shirt, glasses).
+- **Tweak with AI:** for example "make her more sarcastic and obsessed with cats". It edits the character and keeps everything else.
+- **Edit by hand:** every field, six trait sliders (warmth, humor, sarcasm, energy, curiosity, formality), face type, and a per-character voice. Changes save automatically and apply live, mid-call.
+- **Full prompt sent to the model** shows exactly what the LLM receives.
+- Characters are stored in `data/characters.json`. The four starters come from `characters.seed.json`.
+
+## Remembering you (You tab)
+
+- **Profiles:** each person is a profile (name). Pick one, or let recognition pick it.
+- **Learning:** every 5 messages, and when a call ends, the LLM pulls lasting facts about you from the conversation ("Has a dog named Biscuit") and updates that character's relationship summary. Facts are shared by all characters. Each character keeps its own relationship and chat history. Later calls bring this up naturally ("How's Biscuit?").
+- **Strangers:** as a guest, the character asks your name. When you say it, a profile is created automatically, and your face and voice prints are attached if recognition is on.
+- **Face recognition:** [face-api.js](https://github.com/vladmandic/face-api) runs in the browser. Click "Teach my face", or let it learn you as above. With the camera on, it recognizes you at the start of a call and greets you by name.
+- **Voice recognition (experimental):** a simple voiceprint based on the shape of your voice's frequencies. It can tell a few people in a household apart in a quiet room. It's not secure, and face or name are more reliable.
+- You can see, add and delete every remembered fact, edit the relationship summary, or wipe it all.
+
+**Privacy:** everything stays in `companion/data/` on the machine running the server. For faces and voices, only numeric prints are saved, never photos or audio. Get people's consent before enrolling them. Biometric data is regulated in some places (for example under GDPR, or Illinois' BIPA).
 
 ## Voice and ears
 
@@ -53,15 +73,15 @@ The browser voice can't be captured as audio. So with it, the cartoon and 3D mou
 ```
 server.js            zero-dependency Node server; keeps API keys server-side
 providers.json       LLM providers + default model lists
-personas.json        personalities / system prompts
+characters.seed.json starter characters (copied into data/ on first run)
+lib/                 JSON file store + LLM helpers
+data/                your characters, profiles and memories (git-ignored)
 public/index.html    call UI (stage, self-view, controls, settings panel)
 public/js/app.js     the conversation loop, sentence streaming, barge-in, memory
 public/js/speech.js  Speaker (TTS queue + lip-sync level) and Listener (STT + VAD)
+public/js/character.js   builds the system prompt from a character + memories
+public/js/recognition.js face recognition and voiceprints
 public/js/avatars/   cartoon.js, vrm.js, simli.js; each implements mount / update / destroy
 ```
 
 Adding another face (Live2D, a HeyGen/Tavus stream, your own model) means one new file in `avatars/` with `mount(root)`, `update(mouthLevel, state)` and `destroy()`. If the avatar plays audio itself, also add `consumesAudio = true`, `pushAudio(AudioBuffer)` and `clearAudio()`.
-
-## Memory
-
-The last 40 messages are kept in the browser (localStorage) and sent with each turn; **Clear memory** wipes them. A good next step is long-term memory: summarise old turns into facts and store them server-side.

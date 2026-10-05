@@ -21,26 +21,153 @@
         <div id="stage" class="stage">
           <div id="avatar-root" class="avatar-root"></div>
           <div class="tile-label"><span id="state-dot" class="dot"></span><span id="bot-name">Companion</span></div>
+          <div id="who-badge" class="who-badge" hidden></div>
           <div id="caption" class="caption"></div>
-          <div id="stage-msg" class="stage-msg" hidden></div>
+          <div id="toast" class="toast" hidden></div>
         </div>
-        <div class="self-tile" id="self-tile">
+        <div class="self-tile off" id="self-tile">
           <video id="self-video" autoplay muted playsinline></video>
           <div class="tile-label">You</div>
         </div>
 
+        <form id="text-form" class="chat-bar">
+          <input id="inp-text" placeholder="Type a message… (works with or without mic)" autocomplete="off" />
+          <button class="btn">Send</button>
+        </form>
         <div class="controls">
-          <button id="btn-call" class="btn primary" title="Start call">Start call</button>
-          <button id="btn-mic" class="btn" title="Mute / unmute mic" disabled>🎤 Mic on</button>
-          <button id="btn-cam" class="btn" title="Camera on / off">📷 Camera</button>
+          <button id="btn-call" class="btn primary">Start call</button>
+          <button id="btn-mic" class="btn off" title="Microphone on / off">🎤 Mic off</button>
+          <button id="btn-cam" class="btn off" title="Your camera on / off">📷 Camera off</button>
           <button id="btn-stop" class="btn" title="Interrupt the companion">✋ Interrupt</button>
-          <button id="btn-panel" class="btn" title="Settings & transcript">⚙︎</button>
+          <button id="btn-panel" class="btn" title="Show / hide side panel">☰</button>
         </div>
       </main>
 
       <aside id="panel" class="panel">
-        <section>
-          <h2>Brain</h2>
+        <nav class="tabs">
+          <button data-tab="chat" class="on">Chat</button>
+          <button data-tab="character">Character</button>
+          <button data-tab="you">You</button>
+          <button data-tab="settings">Settings</button>
+        </nav>
+
+        <!-- CHAT -->
+        <section data-pane="chat" class="pane chat-pane">
+          <div id="transcript" class="transcript"></div>
+        </section>
+
+        <!-- CHARACTER -->
+        <section data-pane="character" class="pane" hidden>
+          <label>Talking to
+            <div class="row">
+              <select id="sel-character"></select>
+              <button id="btn-dup" class="btn small" title="Duplicate">⧉</button>
+              <button id="btn-del-char" class="btn small" title="Delete">🗑</button>
+            </div>
+          </label>
+
+          <details class="card" open>
+            <summary>✨ Create a new character with AI</summary>
+            <textarea id="inp-describe" rows="3" placeholder="e.g. A retired pirate grandma who loves gardening, swears creatively and gives surprisingly wise advice"></textarea>
+            <button id="btn-generate" class="btn primary small">Create character</button>
+          </details>
+
+          <details class="card">
+            <summary>🪄 Tweak this character with AI</summary>
+            <input id="inp-tweak" placeholder="e.g. make him more sarcastic and obsessed with cats" />
+            <button id="btn-tweak" class="btn small">Apply change</button>
+          </details>
+
+          <h3>Personality</h3>
+          <div id="char-form">
+            <label>Name <input data-f="name" /></label>
+            <label>Tagline <input data-f="tagline" placeholder="who they are in a few words" /></label>
+            <label>Personality <textarea data-f="personality" rows="3"></textarea></label>
+            <label>Backstory <textarea data-f="backstory" rows="3"></textarea></label>
+            <label>Speaking style <textarea data-f="speakingStyle" rows="2"></textarea></label>
+            <label>Likes <input data-f="likes" /></label>
+            <label>Dislikes <input data-f="dislikes" /></label>
+            <label>Extra rules <textarea data-f="rules" rows="2" placeholder="anything they must always / never do"></textarea></label>
+            <label>Greeting <input data-f="greeting" placeholder="first line when a call starts" /></label>
+            <div id="trait-sliders"></div>
+
+            <h3>Look</h3>
+            <div class="seg" id="seg-avatar">
+              <button type="button" data-v="cartoon">Cartoon</button>
+              <button type="button" data-v="vrm">3D</button>
+              <button type="button" data-v="simli">Photoreal</button>
+            </div>
+            <div data-for="cartoon" class="grid2">
+              <label>Skin <input type="color" data-f="look.skin" /></label>
+              <label>Hair <input type="color" data-f="look.hair" /></label>
+              <label>Eyes <input type="color" data-f="look.eyes" /></label>
+              <label>Shirt <input type="color" data-f="look.shirt" /></label>
+              <label>Hair style
+                <select data-f="look.hairStyle">
+                  <option>short</option><option>long</option><option>bun</option><option>spiky</option><option>curly</option><option>none</option>
+                </select>
+              </label>
+              <label class="inline"><input type="checkbox" data-f="look.glasses" /> Glasses</label>
+            </div>
+            <div data-for="vrm" hidden>
+              <label>VRM model URL <input data-f="look.vrmUrl" placeholder="https://…/model.vrm" /></label>
+              <p class="hint">Or drop a .vrm file onto the video. Make one free in VRoid Studio or download from VRoid Hub.</p>
+            </div>
+            <div data-for="simli" hidden>
+              <label>Simli face ID <input data-f="look.simliFaceId" placeholder="from app.simli.com" /></label>
+              <p class="hint">Needs SIMLI_API_KEY and a server voice (ElevenLabs / OpenAI-compatible).</p>
+            </div>
+
+            <h3>Voice</h3>
+            <label>Voice engine <select data-f="voice.tts" id="sel-char-tts"></select></label>
+            <label>Voice ID / name <input data-f="voice.voice" placeholder="ElevenLabs voice ID, OpenAI voice, or part of a browser voice name" /></label>
+          </div>
+          <details class="card">
+            <summary>Full prompt sent to the model</summary>
+            <pre id="prompt-preview" class="prompt-preview"></pre>
+          </details>
+          <p class="hint" id="save-status">Changes save automatically.</p>
+        </section>
+
+        <!-- YOU -->
+        <section data-pane="you" class="pane" hidden>
+          <label>Who's on the call
+            <div class="row">
+              <select id="sel-profile"></select>
+              <button id="btn-new-profile" class="btn small" title="New person">＋</button>
+              <button id="btn-rename-profile" class="btn small" title="Rename">✎</button>
+              <button id="btn-del-profile" class="btn small" title="Delete person and their memories">🗑</button>
+            </div>
+          </label>
+          <p class="hint" id="recog-status"></p>
+
+          <h3>Recognition</h3>
+          <label class="inline"><input type="checkbox" id="chk-face" /> Recognize me by face (when my camera is on)</label>
+          <label class="inline"><input type="checkbox" id="chk-voice" /> Recognize me by voice (experimental)</label>
+          <div class="row wrap">
+            <button id="btn-enroll-face" class="btn small">Teach my face</button>
+            <button id="btn-enroll-voice" class="btn small">Teach my voice</button>
+            <button id="btn-clear-bio" class="btn small">Forget my face &amp; voice</button>
+          </div>
+          <p class="hint">Only numeric face/voice prints are saved, on this computer (companion/data). No photos or recordings.</p>
+
+          <h3 id="memory-title">What they remember about you</h3>
+          <ul id="facts" class="facts"></ul>
+          <form id="fact-form" class="row">
+            <input id="inp-fact" placeholder="Add something they should know…" />
+            <button class="btn small">Add</button>
+          </form>
+          <label>Relationship so far <textarea id="inp-summary" rows="3"></textarea></label>
+          <div class="row wrap">
+            <button id="btn-learn" class="btn small">Learn from this chat now</button>
+            <button id="btn-forget-rel" class="btn small">Forget this relationship</button>
+            <button id="btn-forget-all" class="btn small danger">Forget everything about me</button>
+          </div>
+        </section>
+
+        <!-- SETTINGS -->
+        <section data-pane="settings" class="pane" hidden>
+          <h3>Brain</h3>
           <label>Provider <select id="sel-provider"></select></label>
           <label>Model
             <div class="row">
@@ -49,44 +176,19 @@
             </div>
             <datalist id="model-list"></datalist>
           </label>
-          <label>Persona <select id="sel-persona"></select></label>
-          <label>System prompt <textarea id="inp-prompt" rows="5"></textarea></label>
-          <label class="inline">Temperature <input id="inp-temp" type="range" min="0" max="1.5" step="0.1" value="0.8" /><span id="temp-val">0.8</span></label>
+          <label class="inline">Creativity <input id="inp-temp" type="range" min="0" max="1.5" step="0.1" value="0.8" /><span id="temp-val">0.8</span></label>
           <label class="inline"><input id="chk-vision" type="checkbox" /> Let it see me (sends a webcam frame; vision models only)</label>
-        </section>
 
-        <section>
-          <h2>Face</h2>
-          <div class="seg" id="seg-avatar">
-            <button data-v="cartoon" class="on">Cartoon</button>
-            <button data-v="vrm">3D</button>
-            <button data-v="simli">Photoreal</button>
-          </div>
-          <div data-for="vrm" hidden>
-            <label>VRM model URL <input id="inp-vrm" placeholder="https://…/model.vrm" /></label>
-            <p class="hint">Or drop a .vrm file onto the video. Free models: VRoid Hub / VRoid Studio.</p>
-          </div>
-          <div data-for="simli" hidden>
-            <label>Simli face ID <input id="inp-face" placeholder="from app.simli.com" /></label>
-            <p class="hint">Needs SIMLI_API_KEY plus a server voice (ElevenLabs or OpenAI-compatible).</p>
-          </div>
-        </section>
+          <h3>Joining a call</h3>
+          <label class="inline"><input id="chk-join-mic" type="checkbox" checked /> Start with my mic on</label>
+          <label class="inline"><input id="chk-join-cam" type="checkbox" /> Start with my camera on</label>
+          <p class="hint">Turn both off for a one-way call: they're on video and talk to you, you type.</p>
 
-        <section>
-          <h2>Voice &amp; ears</h2>
-          <label>Voice (TTS) <select id="sel-tts"></select></label>
-          <label>Voice ID / name <input id="inp-voice" placeholder="provider default" /></label>
+          <h3>Voice &amp; ears</h3>
+          <label>Default voice engine <select id="sel-tts"></select></label>
           <label>Speech recognition <select id="sel-stt"></select></label>
           <label class="inline"><input id="chk-bargein" type="checkbox" checked /> Interrupt when I talk (use headphones)</label>
-        </section>
-
-        <section class="transcript-section">
-          <div class="row spread"><h2>Transcript</h2><button id="btn-clear" class="btn small">Clear memory</button></div>
-          <div id="transcript" class="transcript"></div>
-          <form id="text-form" class="row">
-            <input id="inp-text" placeholder="Type instead of talking…" autocomplete="off" />
-            <button class="btn small">Send</button>
-          </form>
+          <label class="inline"><input id="chk-learn" type="checkbox" checked /> Learn about me automatically during calls</label>
         </section>
       </aside>
     </div>
