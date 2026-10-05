@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Companion</title>
+    <link rel="stylesheet" href="style.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+          "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3.5.5/lib/three-vrm.module.min.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div class="app">
+      <main class="call">
+        <div id="stage" class="stage">
+          <div id="avatar-root" class="avatar-root"></div>
+          <div class="tile-label"><span id="state-dot" class="dot"></span><span id="bot-name">Companion</span></div>
+          <div id="caption" class="caption"></div>
+          <div id="stage-msg" class="stage-msg" hidden></div>
+        </div>
+        <div class="self-tile" id="self-tile">
+          <video id="self-video" autoplay muted playsinline></video>
+          <div class="tile-label">You</div>
+        </div>
+
+        <div class="controls">
+          <button id="btn-call" class="btn primary" title="Start call">Start call</button>
+          <button id="btn-mic" class="btn" title="Mute / unmute mic" disabled>🎤 Mic on</button>
+          <button id="btn-cam" class="btn" title="Camera on / off">📷 Camera</button>
+          <button id="btn-stop" class="btn" title="Interrupt the companion">✋ Interrupt</button>
+          <button id="btn-panel" class="btn" title="Settings & transcript">⚙︎</button>
+        </div>
+      </main>
+
+      <aside id="panel" class="panel">
+        <section>
+          <h2>Brain</h2>
+          <label>Provider <select id="sel-provider"></select></label>
+          <label>Model
+            <div class="row">
+              <input id="inp-model" list="model-list" spellcheck="false" />
+              <button id="btn-load-models" class="btn small" title="Fetch every model this provider offers">Load all</button>
+            </div>
+            <datalist id="model-list"></datalist>
+          </label>
+          <label>Persona <select id="sel-persona"></select></label>
+          <label>System prompt <textarea id="inp-prompt" rows="5"></textarea></label>
+          <label class="inline">Temperature <input id="inp-temp" type="range" min="0" max="1.5" step="0.1" value="0.8" /><span id="temp-val">0.8</span></label>
+          <label class="inline"><input id="chk-vision" type="checkbox" /> Let it see me (sends a webcam frame; vision models only)</label>
+        </section>
+
+        <section>
+          <h2>Face</h2>
+          <div class="seg" id="seg-avatar">
+            <button data-v="cartoon" class="on">Cartoon</button>
+            <button data-v="vrm">3D</button>
+            <button data-v="simli">Photoreal</button>
+          </div>
+          <div data-for="vrm" hidden>
+            <label>VRM model URL <input id="inp-vrm" placeholder="https://…/model.vrm" /></label>
+            <p class="hint">Or drop a .vrm file onto the video. Free models: VRoid Hub / VRoid Studio.</p>
+          </div>
+          <div data-for="simli" hidden>
+            <label>Simli face ID <input id="inp-face" placeholder="from app.simli.com" /></label>
+            <p class="hint">Needs SIMLI_API_KEY plus a server voice (ElevenLabs or OpenAI-compatible).</p>
+          </div>
+        </section>
+
+        <section>
+          <h2>Voice &amp; ears</h2>
+          <label>Voice (TTS) <select id="sel-tts"></select></label>
+          <label>Voice ID / name <input id="inp-voice" placeholder="provider default" /></label>
+          <label>Speech recognition <select id="sel-stt"></select></label>
+          <label class="inline"><input id="chk-bargein" type="checkbox" checked /> Interrupt when I talk (use headphones)</label>
+        </section>
+
+        <section class="transcript-section">
+          <div class="row spread"><h2>Transcript</h2><button id="btn-clear" class="btn small">Clear memory</button></div>
+          <div id="transcript" class="transcript"></div>
+          <form id="text-form" class="row">
+            <input id="inp-text" placeholder="Type instead of talking…" autocomplete="off" />
+            <button class="btn small">Send</button>
+          </form>
+        </section>
+      </aside>
+    </div>
+    <script type="module" src="js/app.js"></script>
+  </body>
+</html>

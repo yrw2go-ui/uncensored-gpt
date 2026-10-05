@@ -1,0 +1,32 @@
+{
+  "atlas": {
+    "name": "Atlas Cloud",
+    "baseURL": "https://api.atlascloud.ai/v1",
+    "apiKeyEnv": "ATLASCLOUD_API_KEY",
+    "models": [
+      "deepseek-ai/DeepSeek-V3.1",
+      "deepseek-ai/deepseek-v3.2",
+      "qwen/qwen3.6-plus",
+      "qwen/qwen3-max-2026-01-23",
+      "qwen/qwen3.6-35b-a3b"
+    ]
+  },
+  "openrouter": {
+    "name": "OpenRouter",
+    "baseURL": "https://openrouter.ai/api/v1",
+    "apiKeyEnv": "OPENROUTER_API_KEY",
+    "models": ["meta-llama/llama-3.3-70b-instruct", "mistralai/mistral-small-3.2-24b-instruct"]
+  },
+  "openai": {
+    "name": "OpenAI",
+    "baseURL": "https://api.openai.com/v1",
+    "apiKeyEnv": "OPENAI_API_KEY",
+    "models": ["gpt-4o-mini", "gpt-4o"]
+  },
+  "ollama": {
+    "name": "Ollama (local)",
+    "baseURL": "http://localhost:11434/v1",
+    "apiKeyEnv": null,
+    "models": ["llama3.1:8b", "qwen2.5:7b"]
+  }
+}
