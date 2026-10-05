@@ -2,7 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f1115" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="icon-192.png" />
     <title>AI Companion</title>
     <link rel="stylesheet" href="style.css" />
     <script type="importmap">
@@ -17,47 +22,45 @@
   </head>
   <body>
     <div class="app">
-      <main class="call">
+      <main class="call" id="call">
         <div id="stage" class="stage">
           <div id="avatar-root" class="avatar-root"></div>
-          <div class="tile-label"><span id="state-dot" class="dot"></span><span id="bot-name">Companion</span></div>
+          <div class="tile-label"><span id="state-dot" class="dot"></span><span id="bot-name">Companion</span><span id="call-timer" class="call-timer"></span></div>
           <div id="who-badge" class="who-badge" hidden></div>
+          <div class="self-tile off" id="self-tile">
+            <video id="self-video" autoplay muted playsinline></video>
+          </div>
           <div id="caption" class="caption"></div>
           <div id="toast" class="toast" hidden></div>
-        </div>
-        <div class="self-tile off" id="self-tile">
-          <video id="self-video" autoplay muted playsinline></video>
-          <div class="tile-label">You</div>
+          <div class="controls">
+            <button id="btn-mic" class="round off" title="Microphone on / off" aria-label="Microphone">🎤</button>
+            <button id="btn-cam" class="round off" title="Your camera on / off" aria-label="Camera">📷</button>
+            <button id="btn-call" class="round call" title="Call" aria-label="Call">📞</button>
+            <button id="btn-stop" class="round" title="Interrupt" aria-label="Interrupt">✋</button>
+            <button id="btn-full" class="round" title="Full screen" aria-label="Full screen">⛶</button>
+            <button id="btn-panel" class="round" title="Character, memory & settings" aria-label="Menu">☰</button>
+          </div>
         </div>
 
-        <form id="text-form" class="chat-bar">
-          <input id="inp-text" placeholder="Type a message… (works with or without mic)" autocomplete="off" />
-          <button class="btn">Send</button>
-        </form>
-        <div class="controls">
-          <button id="btn-call" class="btn primary">Start call</button>
-          <button id="btn-mic" class="btn off" title="Microphone on / off">🎤 Mic off</button>
-          <button id="btn-cam" class="btn off" title="Your camera on / off">📷 Camera off</button>
-          <button id="btn-stop" class="btn" title="Interrupt the companion">✋ Interrupt</button>
-          <button id="btn-panel" class="btn" title="Show / hide side panel">☰</button>
-        </div>
+        <section class="chat">
+          <div id="transcript" class="transcript"></div>
+          <form id="text-form" class="chat-bar">
+            <input id="inp-text" placeholder="Message…" autocomplete="off" enterkeyhint="send" />
+            <button class="send" aria-label="Send">➤</button>
+          </form>
+        </section>
       </main>
 
       <aside id="panel" class="panel">
         <nav class="tabs">
-          <button data-tab="chat" class="on">Chat</button>
-          <button data-tab="character">Character</button>
+          <button data-tab="character" class="on">Character</button>
           <button data-tab="you">You</button>
           <button data-tab="settings">Settings</button>
+          <button id="btn-close-panel" class="close" aria-label="Close">✕</button>
         </nav>
 
-        <!-- CHAT -->
-        <section data-pane="chat" class="pane chat-pane">
-          <div id="transcript" class="transcript"></div>
-        </section>
-
         <!-- CHARACTER -->
-        <section data-pane="character" class="pane" hidden>
+        <section data-pane="character" class="pane">
           <label>Talking to
             <div class="row">
               <select id="sel-character"></select>
@@ -122,6 +125,25 @@
             <label>Voice engine <select data-f="voice.tts" id="sel-char-tts"></select></label>
             <label>Voice ID / name <input data-f="voice.voice" placeholder="ElevenLabs voice ID, OpenAI voice, or part of a browser voice name" /></label>
           </div>
+          <h3>Calls from <span class="char-name">them</span></h3>
+          <label><span class="char-name">They</span> can call me
+            <select data-f="calls.mode">
+              <option value="never">Never</option>
+              <option value="sometimes">Now and then (about once a day)</option>
+              <option value="daily">Every day at a set time</option>
+            </select>
+          </label>
+          <label data-calls="daily">Time <input type="time" data-f="calls.time" /></label>
+          <div class="grid2" data-calls="any">
+            <label>Quiet from <input type="time" data-f="calls.quietStart" /></label>
+            <label>until <input type="time" data-f="calls.quietEnd" /></label>
+          </div>
+          <div class="row wrap">
+            <button id="btn-notify" class="btn small" type="button">Ring this device when they call</button>
+            <button id="btn-test-call" class="btn small" type="button">Test: call me in 10 s</button>
+          </div>
+          <p class="hint" id="notify-status">Calls ring here while this page is open. Allow notifications to get them when it's closed (on iPhone: Share → Add to Home Screen first).</p>
+
           <details class="card">
             <summary>Full prompt sent to the model</summary>
             <pre id="prompt-preview" class="prompt-preview"></pre>
@@ -191,6 +213,17 @@
           <label class="inline"><input id="chk-learn" type="checkbox" checked /> Learn about me automatically during calls</label>
         </section>
       </aside>
+    </div>
+    <div id="call-screen" class="call-screen" hidden>
+      <div class="cs-top">
+        <div id="cs-avatar" class="cs-avatar"></div>
+        <div id="cs-name" class="cs-name"></div>
+        <div id="cs-status" class="cs-status"></div>
+      </div>
+      <div class="cs-buttons">
+        <div class="cs-btn"><button id="cs-decline" class="round big end" aria-label="Decline">📞</button><span id="cs-decline-label">Decline</span></div>
+        <div class="cs-btn" id="cs-answer-wrap"><button id="cs-answer" class="round big answer" aria-label="Answer">📞</button><span>Answer</span></div>
+      </div>
     </div>
     <script type="module" src="js/app.js"></script>
   </body>

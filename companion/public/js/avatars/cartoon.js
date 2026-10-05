@@ -53,7 +53,7 @@ export class CartoonAvatar {
       <svg viewBox="-200 -200 400 400" preserveAspectRatio="xMidYMid meet">
         <g class="head">
           <g fill="${L.hair}">${HAIR_BACK[L.hairStyle] || ""}</g>
-          <path d="M-150 220 Q-150 110 0 100 Q150 110 150 220 Z" fill="${L.shirt}"/>
+          <path d="M-150 700 L-150 220 Q-150 110 0 100 Q150 110 150 220 L150 700 Z" fill="${L.shirt}"/>
           <rect x="-26" y="80" width="52" height="40" fill="${L.skin}"/>
           <circle cx="0" cy="0" r="120" fill="${L.skin}"/>
           <ellipse cx="-62" cy="38" rx="20" ry="11" fill="#ff8fa3" opacity="0.35"/>

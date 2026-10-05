@@ -18,6 +18,33 @@ npm start                   # no npm install needed, Node 18+
 
 Open http://localhost:8787 in **Chrome or Edge**, click **Start call** and allow the mic. Headphones stop it from hearing (and interrupting) itself.
 
+## On your phone
+
+It works like a phone call. Tap the green **📞** and it rings a few times, then the character picks up. The video is on top and your texts are below it. The buttons on the video toggle your mic and camera, interrupt, go **full screen** (tap again to go back), and open the menu. Texting while not on a call works like messaging: you get text replies, not voice.
+
+Phones only allow camera, mic and notifications on **HTTPS**. The easiest setup is a free tunnel from the computer running the server:
+
+```bash
+npm start                                         # in one terminal
+npx cloudflared tunnel --url http://localhost:8787 # in another; open the https://….trycloudflare.com link on your phone
+```
+
+You can also set `HTTPS_CERT` / `HTTPS_KEY` (for example from `mkcert`), or deploy to any Node host.
+
+**Add it to your home screen** (Share → Add to Home Screen on iPhone, or ⋮ → Install app on Android). It then opens full screen like an app, and on iPhone this is required for call notifications.
+
+## When they call you
+
+In **Character → Calls from …**, choose **Never**, **Now and then** (about once a day, at random) or **Every day at** a set time, plus quiet hours when they won't call.
+
+- While the app is open, the call rings with a ringtone, vibration and Answer / Decline buttons.
+- Tap **Ring this device when they call** to allow notifications. Calls then ring even when the app is closed or the phone is locked; tapping the notification opens the call.
+- If you don't answer within 45 seconds it's a missed call. When you call back, they know they tried you earlier.
+- When they call, they open with a reason, usually something they remember about you.
+- **Test: call me in 10 s** tries the whole flow.
+
+The server must stay running for scheduled calls to happen.
+
 **One-way calls:** in Settings, untick "Start with my mic on" and "Start with my camera on". The character is on video and talks to you; you type in the box under the video. You can switch your mic or camera on or off at any point.
 
 With only an Atlas Cloud key you get the cartoon and 3D avatars, the browser's free voice and free speech recognition. Adding more keys unlocks better voices and the photoreal face.
@@ -68,6 +95,16 @@ The browser voice can't be captured as audio. So with it, the cartoon and 3D mou
 | Voice (TTS) | Browser `speechSynthesis` | `ELEVENLABS_API_KEY` + `ELEVENLABS_VOICE_ID`, or any OpenAI-compatible `/audio/speech` via `TTS_BASE_URL` (OpenAI, Kokoro-FastAPI…) |
 | Ears (STT) | Browser speech recognition (Chrome/Edge) | Any OpenAI-compatible `/audio/transcriptions` via `STT_BASE_URL` (OpenAI Whisper, Groq, faster-whisper-server…), using built-in voice-activity detection |
 
+## Later
+
+Planned next steps, kept out for now so the basics stay solid:
+
+- **Scenes:** characters in different places: the kitchen cooking, in bed in the morning or before sleep, walking on a treadmill at the gym.
+- **Outfits:** different clothes each day.
+- **Situational awareness:** time of day, what they're "doing", and continuity between calls.
+
+The avatar code can take a background, scene and outfit per call, and the prompt builder (`character.js`) is where the "what I'm doing right now" context will go.
+
 ## Files
 
 ```
@@ -81,6 +118,9 @@ public/js/app.js     the conversation loop, sentence streaming, barge-in, memory
 public/js/speech.js  Speaker (TTS queue + lip-sync level) and Listener (STT + VAD)
 public/js/character.js   builds the system prompt from a character + memories
 public/js/recognition.js face recognition and voiceprints
+public/js/ringtone.js    synthesized ringtone / ringback / hang-up sounds
+public/sw.js             service worker: turns a push into an incoming-call notification
+lib/push.js, lib/calls.js  Web Push (VAPID, no dependencies) and the call scheduler
 public/js/avatars/   cartoon.js, vrm.js, simli.js; each implements mount / update / destroy
 ```
 

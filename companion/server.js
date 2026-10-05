@@ -2,11 +2,14 @@
 // Serves the web UI, proxies LLM / TTS / STT / avatar calls so API keys stay server-side,
 // and stores characters, user profiles and memories as JSON files in ./data.
 import http from "node:http";
+import https from "node:https";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Store } from "./lib/store.js";
 import { resolveProvider, chatRequest, chatJson } from "./lib/llm.js";
+import { Push } from "./lib/push.js";
+import { Calls } from "./lib/calls.js";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, "public");
@@ -15,6 +18,8 @@ loadEnv(path.join(ROOT, ".env"));
 const PORT = Number(process.env.PORT || 8787);
 const providers = readJson("providers.json");
 const store = new Store(process.env.DATA_DIR || path.join(ROOT, "data"));
+const push = new Push(store, process.env.VAPID_SUBJECT);
+const calls = new Calls(store, push, () => getCharacters());
 
 const MAX_HISTORY = 40;
 const MAX_FACTS = 200;
@@ -73,6 +78,7 @@ const MIME = {
   ".png": "image/png",
   ".vrm": "application/octet-stream",
   ".glb": "model/gltf-binary",
+  ".webmanifest": "application/manifest+json",
 };
 
 function serveStatic(req, res) {
@@ -128,6 +134,13 @@ function normalizeCharacter(c = {}) {
       simliFaceId: str(look.simliFaceId, 100),
     },
     voice: { tts: str(voice.tts, 20), voice: str(voice.voice, 100) },
+    calls: {
+      mode: ["never", "sometimes", "daily"].includes(c.calls?.mode) ? c.calls.mode : "never",
+      time: /^\d\d:\d\d$/.test(c.calls?.time || "") ? c.calls.time : "19:00",
+      quietStart: /^\d\d:\d\d$/.test(c.calls?.quietStart || "") ? c.calls.quietStart : "22:30",
+      quietEnd: /^\d\d:\d\d$/.test(c.calls?.quietEnd || "") ? c.calls.quietEnd : "08:00",
+      tz: str(c.calls?.tz, 60),
+    },
     updatedAt: Date.now(),
   };
 }
@@ -175,7 +188,7 @@ async function generateCharacter(req, res) {
   );
   // Keep id / avatar / voice settings the user already chose when refining.
   const merged = base
-    ? { ...base, ...out, id: base.id, look: { ...base.look, ...out.look, avatar: base.look?.avatar, vrmUrl: base.look?.vrmUrl, simliFaceId: base.look?.simliFaceId }, voice: base.voice }
+    ? { ...base, ...out, id: base.id, look: { ...base.look, ...out.look, avatar: base.look?.avatar, vrmUrl: base.look?.vrmUrl, simliFaceId: base.look?.simliFaceId }, voice: base.voice, calls: base.calls }
     : { ...out, id: undefined };
   sendJson(res, 200, normalizeCharacter(merged));
 }
@@ -522,6 +535,35 @@ const routes = [
   ["PUT", "/api/memory", writeMemory],
   ["DELETE", "/api/memory", forgetMemory],
   ["POST", "/api/memory/learn", learn],
+  ["GET", "/api/push/key", (req, res) => sendJson(res, 200, { publicKey: push.publicKey })],
+  ["POST", "/api/push/subscribe", async (req, res) => {
+    const { subscription, profile } = await readJsonBody(req);
+    push.subscribe(subscription, profile);
+    sendJson(res, 200, { ok: true });
+  }],
+  ["POST", "/api/push/unsubscribe", async (req, res) => {
+    push.unsubscribe((await readJsonBody(req)).endpoint);
+    sendJson(res, 200, { ok: true });
+  }],
+  ["GET", "/api/calls/pending", (req, res) => sendJson(res, 200, { call: calls.pending() })],
+  ["GET", "/api/calls/missed", (req, res) => {
+    const id = new URL(req.url, "http://x").searchParams.get("character");
+    sendJson(res, 200, { lastMissed: calls.lastMissed(id) });
+  }],
+  ["POST", "/api/calls/ring", async (req, res) => {
+    const { character, delaySeconds = 0 } = await readJsonBody(req);
+    if (!getCharacters().some((c) => c.id === character)) throw httpError(404, "No such character");
+    if (delaySeconds > 0) calls.ringLater(character, Math.min(delaySeconds, 3600) * 1000);
+    else await calls.ring(character);
+    sendJson(res, 200, { ok: true, devices: push.subscriptions().length });
+  }],
+  ["POST", /^\/api\/calls\/([\w-]+)\/(answer|decline)$/, (req, res, id, action) => {
+    sendJson(res, 200, { ok: calls.resolve(id, action === "answer") });
+  }],
+  ["POST", "/api/calls/seen", async (req, res) => {
+    calls.clearMissed((await readJsonBody(req)).character);
+    sendJson(res, 200, { ok: true });
+  }],
 ];
 
 function match(method, pathname) {
@@ -534,16 +576,22 @@ function match(method, pathname) {
   return null;
 }
 
-http
-  .createServer(async (req, res) => {
-    const found = match(req.method, new URL(req.url, "http://x").pathname);
-    if (!found) return serveStatic(req, res);
-    try {
-      await found[0](req, res, ...found[1]);
-    } catch (e) {
-      if (!e.status) console.error(req.method, req.url, e);
-      if (!res.headersSent) sendJson(res, e.status || 500, { error: String(e.message || e) });
-      else res.end();
-    }
-  })
-  .listen(PORT, () => console.log(`AI Companion running at http://localhost:${PORT}`));
+async function handle(req, res) {
+  const found = match(req.method, new URL(req.url, "http://x").pathname);
+  if (!found) return serveStatic(req, res);
+  try {
+    await found[0](req, res, ...found[1]);
+  } catch (e) {
+    if (!e.status) console.error(req.method, req.url, e);
+    if (!res.headersSent) sendJson(res, e.status || 500, { error: String(e.message || e) });
+    else res.end();
+  }
+}
+
+// Phones only allow camera, mic and push notifications over HTTPS.
+// Set HTTPS_CERT + HTTPS_KEY (e.g. from mkcert) to serve HTTPS directly, or put a tunnel in front.
+const tls = process.env.HTTPS_CERT && process.env.HTTPS_KEY;
+const server = tls
+  ? https.createServer({ cert: fs.readFileSync(process.env.HTTPS_CERT), key: fs.readFileSync(process.env.HTTPS_KEY) }, handle)
+  : http.createServer(handle);
+server.listen(PORT, () => console.log(`AI Companion running at ${tls ? "https" : "http"}://localhost:${PORT}`));

@@ -4,6 +4,7 @@ import { Speaker, Listener } from "./speech.js";
 import { CartoonAvatar } from "./avatars/cartoon.js";
 import { compilePrompt, TRAITS } from "./character.js";
 import { FaceId, VoicePrint } from "./recognition.js";
+import { startRing, stopRing, hangupBeep } from "./ringtone.js";
 
 const $ = (id) => document.getElementById(id);
 const local = {
@@ -239,7 +240,7 @@ function setField(obj, path, value) {
 }
 
 function renderCharacterForm() {
-  for (const el of document.querySelectorAll("#char-form [data-f]")) {
+  for (const el of document.querySelectorAll('[data-pane="character"] [data-f]')) {
     const v = getField(character, el.dataset.f);
     if (el.type === "checkbox") el.checked = Boolean(v);
     else el.value = v ?? "";
@@ -248,7 +249,16 @@ function renderCharacterForm() {
     $(`trait-${t}`).value = character.traits[t];
     $(`trait-${t}-v`).textContent = character.traits[t];
   }
+  updateCallsUI();
   renderPromptPreview();
+}
+
+function updateCallsUI() {
+  const mode = character.calls?.mode || "never";
+  document.querySelectorAll("[data-calls]").forEach((el) => {
+    el.hidden = mode === "never" || (el.dataset.calls === "daily" && mode !== "daily");
+  });
+  document.querySelectorAll(".char-name").forEach((el) => (el.textContent = character.name));
 }
 
 function renderPromptPreview() {
@@ -276,6 +286,8 @@ const saveCharacter = debounce(async () => {
 }, 600);
 
 function onCharacterEdited() {
+  character.calls = { ...character.calls, tz: Intl.DateTimeFormat().resolvedOptions().timeZone };
+  updateCallsUI();
   $("bot-name").textContent = character.name;
   $("save-status").textContent = "Saving…";
   renderPromptPreview();
@@ -649,7 +661,7 @@ class SentenceSplitter {
 async function respond(extraUser) {
   const controller = new AbortController();
   const bubble = addMessage("assistant", "…");
-  const splitter = new SentenceSplitter((s) => speaker.say(s));
+  const splitter = new SentenceSplitter((s) => inCall && speaker.say(s)); // texting outside a call = no voice
   const current = { controller, bubble, splitter };
   reply = current;
   setState("thinking");
@@ -669,7 +681,7 @@ async function respond(extraUser) {
       if (done) break;
       text = splitter.push(dec.decode(value, { stream: true }));
       bubble.textContent = text || "…";
-      $("caption").textContent = text.slice(-160);
+      if (inCall) $("caption").textContent = text.slice(-160);
     }
     text = splitter.flush();
     bubble.textContent = text || "(no reply)";
@@ -705,23 +717,27 @@ function interrupt() {
 }
 
 // ---------- call controls ----------
+// Outside a call the mic / camera buttons set how you'll join (camera shows a preview, like FaceTime).
 async function setMic(on) {
-  if (on) {
+  if (!inCall) {
+    $("chk-join-mic").checked = on;
+    saveSettings();
+  } else if (on) {
     speaker.unlock();
     try {
       await listener.start($("sel-stt").value);
     } catch (e) {
-      return showError(`Microphone: ${e.message}`);
+      on = false;
+      showError(`Microphone: ${e.message}`);
     }
-    micOn = true;
-    startVoiceRecognition();
+    if (on) startVoiceRecognition();
   } else {
     listener.stop();
     stopVoiceRecognition();
-    micOn = false;
   }
-  $("btn-mic").textContent = micOn ? "🎤 Mic on" : "🎤 Mic off";
-  $("btn-mic").classList.toggle("off", !micOn);
+  micOn = on;
+  $("btn-mic").classList.toggle("off", !on);
+  $("btn-mic").title = on ? "Mute" : "Unmute";
   if (inCall) setState(speaker.speaking ? "speaking" : reply ? "thinking" : "listening");
 }
 
@@ -731,27 +747,122 @@ async function setCamera(on) {
     camStream = null;
   } else if (!camStream) {
     try {
-      camStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 400 } });
+      camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: 640, height: 480 } });
       $("self-video").srcObject = camStream;
       await $("self-video").play().catch(() => {});
     } catch (e) {
       showError(`Camera: ${e.message}`);
     }
   }
+  if (!inCall) {
+    $("chk-join-cam").checked = Boolean(camStream);
+    saveSettings();
+  }
   $("self-tile").classList.toggle("off", !camStream);
-  $("btn-cam").textContent = camStream ? "📷 Camera on" : "📷 Camera off";
   $("btn-cam").classList.toggle("off", !camStream);
   if (camStream && inCall && profileId === GUEST) recognizeFace({ announce: true });
 }
 
-async function startCall() {
+// ----- the ringing / calling screen -----
+let callScreen = null; // { kind, call, timeout }
+
+function showCallScreen(kind, call = null) {
+  const scr = $("call-screen");
+  $("cs-name").textContent = character.name;
+  $("cs-status").textContent = kind === "incoming" ? "Incoming video call…" : "Calling…";
+  $("cs-answer-wrap").hidden = kind !== "incoming";
+  $("cs-decline-label").textContent = kind === "incoming" ? "Decline" : "Cancel";
+  const pic = $("cs-avatar");
+  pic.innerHTML = "";
+  if (character.look.avatar === "cartoon") new CartoonAvatar({ look: character.look }).mount(pic);
+  else pic.textContent = character.name[0]?.toUpperCase() || "?";
+  scr.className = "call-screen ringing";
+  scr.hidden = false;
+  startRing(kind);
+  callScreen = { kind, call };
+}
+
+function hideCallScreen() {
+  stopRing();
+  clearTimeout(callScreen?.timeout);
+  callScreen = null;
+  $("call-screen").hidden = true;
+}
+
+/** You call them: ring a couple of times, then they pick up. */
+function placeCall() {
+  speaker.unlock();
+  showCallScreen("outgoing");
+  const mine = callScreen;
+  mine.timeout = setTimeout(() => {
+    if (callScreen !== mine) return;
+    hideCallScreen();
+    startCall("outgoing");
+  }, 2500 + Math.random() * 4000);
+}
+
+/** They call you. */
+async function incomingCall(call) {
+  if (inCall || callScreen || handledCalls.has(call.id)) return;
+  handledCalls.add(call.id);
+  if (character?.id !== call.characterId) await selectCharacter(call.characterId);
+  showCallScreen("incoming", call);
+  const mine = callScreen;
+  mine.timeout = setTimeout(() => {
+    if (callScreen !== mine) return;
+    hideCallScreen();
+    addMessage("event", `Missed video call from ${character.name}`);
+  }, Math.max(5000, 45000 - (Date.now() - call.at)));
+}
+
+async function answerCallScreen() {
+  const cs = callScreen;
+  if (!cs) return;
+  speaker.unlock();
+  hideCallScreen();
+  if (cs.kind === "incoming") {
+    await api(`/api/calls/${cs.call.id}/answer`, { method: "POST" }).catch(() => {});
+    startCall("incoming");
+  }
+}
+
+async function declineCallScreen() {
+  const cs = callScreen;
+  if (!cs) return;
+  hideCallScreen();
+  if (cs.kind === "incoming") {
+    await api(`/api/calls/${cs.call.id}/decline`, { method: "POST" }).catch(() => {});
+    addMessage("event", `You declined ${character.name}'s call`);
+  }
+}
+
+const handledCalls = new Set();
+async function checkIncoming() {
+  if (inCall || callScreen) return;
+  try {
+    const { call } = await api("/api/calls/pending");
+    if (call) incomingCall(call);
+  } catch {}
+}
+
+// ----- the call itself -----
+let callStartedAt = 0;
+let callTimer;
+
+async function startCall(direction = "outgoing") {
   speaker.unlock();
   inCall = true;
-  $("btn-call").textContent = "End call";
-  $("btn-call").className = "btn danger";
+  $("btn-call").className = "round end-call";
+  $("btn-call").title = "End call";
   setState("listening");
+  callStartedAt = Date.now();
+  clearInterval(callTimer);
+  callTimer = setInterval(() => {
+    const s = Math.floor((Date.now() - callStartedAt) / 1000);
+    $("call-timer").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  }, 1000);
   await Promise.all([
-    $("chk-join-mic").checked ? setMic(true) : null,
+    $("chk-join-mic").checked ? setMic(true) : setMic(false),
     $("chk-join-cam").checked ? setCamera(true) : null,
   ]);
   // Give face recognition a moment so the greeting can use their name.
@@ -759,25 +870,94 @@ async function startCall() {
     setState("thinking");
     await Promise.race([recognizeFace(), new Promise((r) => setTimeout(r, 4000))]);
   }
+  const { lastMissed } = await api(`/api/calls/missed?character=${character.id}`).catch(() => ({}));
   api("/api/memory", { method: "PUT", body: { profile: profileId, character: character.id, callStarted: true } })
     .then((m) => (memory = m))
     .catch(() => {});
+  if (lastMissed) api("/api/calls/seen", { method: "POST", body: { character: character.id } }).catch(() => {});
+
   const p = currentProfile();
-  const since = memory.lastSeen ? " It's been a while since your last call, so reflect that naturally." : "";
+  const them = p ? p.name : "them";
+  let situation =
+    direction === "incoming"
+      ? `You video-called ${them} and they just picked up. Open naturally and say why you called: maybe checking in on something you remember about them, sharing something from your day, or just because you missed them.`
+      : `${p ? p.name : "Someone"} just video-called you and you picked up.`;
+  if (direction === "outgoing" && lastMissed) situation += " Earlier you tried calling them and they didn't answer, so they may be calling you back.";
   respond(
-    `(The video call just connected.${p ? ` It's ${p.name}.` : ""}${since} Greet them in one or two short spoken sentences.` +
-      `${character.greeting ? ` Your usual greeting is: "${character.greeting}". Adapt it.` : ""})`,
+    `(${situation} Speak in one or two short sentences.` +
+      `${character.greeting && direction === "outgoing" ? ` Your usual greeting is: "${character.greeting}". Adapt it.` : ""})`,
   );
 }
 
 async function endCall() {
   inCall = false;
   interrupt();
-  await setMic(false);
-  $("btn-call").textContent = "Start call";
-  $("btn-call").className = "btn primary";
+  // Hang up mic and camera but keep your join preferences.
+  listener.stop();
+  stopVoiceRecognition();
+  micOn = $("chk-join-mic").checked;
+  $("btn-mic").classList.toggle("off", !micOn);
+  camStream?.getTracks().forEach((t) => t.stop());
+  camStream = null;
+  $("self-tile").classList.add("off");
+  $("btn-cam").classList.add("off");
+  hangupBeep();
+  clearInterval(callTimer);
+  const secs = Math.floor((Date.now() - callStartedAt) / 1000);
+  $("call-timer").textContent = "";
+  addMessage("event", `Video call ended · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`);
+  $("btn-call").className = "round call";
+  $("btn-call").title = "Call";
   setState("idle");
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  $("call").classList.remove("full");
   if ($("chk-learn").checked) learnNow({ quiet: false });
+}
+
+function toggleFullscreen() {
+  const call = $("call");
+  const on = !call.classList.contains("full");
+  call.classList.toggle("full", on);
+  // Real fullscreen where supported (Android / desktop); iPhone falls back to filling the page.
+  if (on) document.documentElement.requestFullscreen?.().catch(() => {});
+  else if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+}
+
+// ----- call notifications (push) -----
+async function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return null;
+  try {
+    return await navigator.serviceWorker.register("/sw.js");
+  } catch (e) {
+    console.warn("service worker unavailable", e);
+    return null;
+  }
+}
+
+async function enableCallNotifications() {
+  const status = $("notify-status");
+  if (!window.isSecureContext) return (status.textContent = "Notifications need HTTPS. See the README for phone setup.");
+  const reg = await registerServiceWorker();
+  if (!reg || !("PushManager" in window)) {
+    return (status.textContent = "This browser can't receive push. On iPhone, add the app to your Home Screen first (Share → Add to Home Screen).");
+  }
+  if ((await Notification.requestPermission()) !== "granted") return (status.textContent = "Notifications are blocked for this site.");
+  try {
+    const { publicKey } = await api("/api/push/key");
+    const sub =
+      (await reg.pushManager.getSubscription()) ||
+      (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: publicKey }));
+    await api("/api/push/subscribe", { method: "POST", body: { subscription: sub.toJSON(), profile: profileId } });
+    status.textContent = "✅ This device will ring when they call, even when the app is closed.";
+  } catch (e) {
+    status.textContent = `Couldn't enable notifications: ${e.message}`;
+  }
+}
+
+async function testCall() {
+  await api("/api/calls/ring", { method: "POST", body: { character: character.id, delaySeconds: 10 } });
+  toast(`${character.name} will call you in 10 seconds. You can lock your phone if notifications are on.`);
+  setTimeout(checkIncoming, 10500);
 }
 
 // ---------- settings ----------
@@ -827,7 +1007,7 @@ function wireEvents() {
   );
 
   // character editor
-  for (const el of document.querySelectorAll("#char-form [data-f]")) {
+  for (const el of document.querySelectorAll('[data-pane="character"] [data-f]')) {
     el.addEventListener(el.type === "color" || el.tagName === "SELECT" || el.type === "checkbox" ? "input" : "change", () => {
       setField(character, el.dataset.f, el.type === "checkbox" ? el.checked : el.value);
       onCharacterEdited();
@@ -938,9 +1118,16 @@ function wireEvents() {
   };
 
   // call controls
-  $("btn-call").onclick = () => (inCall ? endCall() : startCall());
-  $("btn-mic").onclick = () => (!micOn && !inCall ? startCall().then(() => !micOn && setMic(true)) : setMic(!micOn));
+  $("btn-call").onclick = () => (inCall ? endCall() : placeCall());
+  $("btn-mic").onclick = () => setMic(!micOn);
   $("btn-cam").onclick = () => setCamera(!camStream);
+  $("btn-full").onclick = toggleFullscreen;
+  document.addEventListener("fullscreenchange", () => !document.fullscreenElement && $("call").classList.remove("full"));
+  $("btn-close-panel").onclick = () => $("panel").classList.add("hidden");
+  $("cs-answer").onclick = answerCallScreen;
+  $("cs-decline").onclick = declineCallScreen;
+  $("btn-notify").onclick = enableCallNotifications;
+  $("btn-test-call").onclick = testCall;
   $("btn-stop").onclick = interrupt;
   $("btn-panel").onclick = () => $("panel").classList.toggle("hidden");
   $("text-form").onsubmit = (e) => {
@@ -1010,9 +1197,20 @@ async function init() {
 
   buildTraitSliders();
   wireEvents();
+  micOn = $("chk-join-mic").checked;
+  $("btn-mic").classList.toggle("off", !micOn);
+  if (matchMedia("(max-width: 760px)").matches) $("panel").classList.add("hidden");
   await loadProfiles();
   await selectCharacter(settings.character || characters[0]?.id);
   animate();
+
+  // Incoming calls: poll while open, and react to taps on call notifications.
+  registerServiceWorker();
+  setInterval(checkIncoming, 5000);
+  document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && checkIncoming());
+  navigator.serviceWorker?.addEventListener("message", (e) => e.data?.type === "answer" && checkIncoming());
+  if (new URLSearchParams(location.search).has("answer")) window.history.replaceState(null, "", "/");
+  checkIncoming();
 }
 
 init().catch((e) => showError(`Startup failed: ${e.message}`));
