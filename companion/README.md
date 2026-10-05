@@ -18,6 +18,10 @@ npm start                   # no npm install needed, Node 18+
 
 Open http://localhost:8787 in **Chrome or Edge**, click **Start call** and allow the mic. Headphones stop it from hearing (and interrupting) itself.
 
+## Deploy (run it 24/7)
+
+See **[DEPLOY.md](DEPLOY.md)**. Railway takes about 10 minutes and costs about $5/month. You get a permanent `https://` link for your phone, scheduled calls work around the clock, and memories are saved on a persistent disk.
+
 ## On your phone
 
 It works like a phone call. Tap the green **📞** and it rings a few times, then the character picks up. The video is on top and your texts are below it. The buttons on the video toggle your mic and camera, interrupt, go **full screen** (tap again to go back), and open the menu. Texting while not on a call works like messaging: you get text replies, not voice.

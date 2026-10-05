@@ -56,6 +56,7 @@ async function api(path, { method = "GET", body } = {}) {
     headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
+  if (r.status === 401) location.href = "/login.html"; // session expired or password changed
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.error || `${method} ${path} failed (${r.status})`);
   return data;

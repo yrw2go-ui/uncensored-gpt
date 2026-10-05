@@ -10,6 +10,7 @@ import { Store } from "./lib/store.js";
 import { resolveProvider, chatRequest, chatJson } from "./lib/llm.js";
 import { Push } from "./lib/push.js";
 import { Calls } from "./lib/calls.js";
+import { Auth } from "./lib/auth.js";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, "public");
@@ -20,6 +21,14 @@ const providers = readJson("providers.json");
 const store = new Store(process.env.DATA_DIR || path.join(ROOT, "data"));
 const push = new Push(store, process.env.VAPID_SUBJECT);
 const calls = new Calls(store, push, () => getCharacters());
+const auth = new Auth(process.env.APP_PASSWORD, store);
+
+// On a hosting platform, refuse to run wide open: anyone with the URL could spend your API credits and read memories.
+const HOSTED = ["RAILWAY_ENVIRONMENT", "RENDER", "FLY_APP_NAME", "K_SERVICE"].some((k) => process.env[k]);
+if (HOSTED && !auth.enabled && process.env.ALLOW_NO_PASSWORD !== "1") {
+  console.error("Refusing to start: set APP_PASSWORD (or ALLOW_NO_PASSWORD=1 if something else protects this app).");
+  process.exit(1);
+}
 
 const MAX_HISTORY = 40;
 const MAX_FACTS = 200;
@@ -517,6 +526,13 @@ async function simliSession(req, res) {
 
 // ---------- routing ----------
 const routes = [
+  ["GET", "/healthz", (req, res) => sendJson(res, 200, { ok: true })],
+  ["POST", "/api/login", async (req, res) => {
+    const { password } = await readJsonBody(req);
+    if (!auth.enabled || auth.login(req, res, password || "")) return sendJson(res, 200, { ok: true });
+    sendJson(res, 401, { error: "Wrong password" });
+  }],
+  ["POST", "/api/logout", (req, res) => (auth.logout(res), sendJson(res, 200, { ok: true }))],
   ["GET", "/api/config", getConfig],
   ["GET", "/api/models", listModels],
   ["POST", "/api/chat", chat],
@@ -577,7 +593,13 @@ function match(method, pathname) {
 }
 
 async function handle(req, res) {
-  const found = match(req.method, new URL(req.url, "http://x").pathname);
+  const pathname = new URL(req.url, "http://x").pathname;
+  if (!auth.isPublic(pathname) && !auth.isAuthed(req)) {
+    if (pathname.startsWith("/api/")) return sendJson(res, 401, { error: "Sign in first" });
+    res.writeHead(302, { Location: "/login.html" });
+    return res.end();
+  }
+  const found = match(req.method, pathname);
   if (!found) return serveStatic(req, res);
   try {
     await found[0](req, res, ...found[1]);
