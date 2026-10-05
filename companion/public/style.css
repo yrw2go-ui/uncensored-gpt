@@ -184,3 +184,48 @@ button, input, select, textarea { font: inherit; color: inherit; }
   .tile-label { top: calc(10px + env(safe-area-inset-top)); }
   .self-tile { top: calc(10px + env(safe-area-inset-top)); }
 }
+
+/* ---------- memories page ---------- */
+.mem-body { height: auto; min-height: 100%; }
+.mem-header {
+  position: sticky; top: 0; z-index: 5; display: grid; grid-template-columns: 80px 1fr 80px; align-items: center;
+  padding: calc(10px + env(safe-area-inset-top)) 16px 10px; background: rgba(15, 17, 21, 0.92);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-bottom: 1px solid var(--line);
+}
+.mem-header h1 { margin: 0; font-size: 18px; text-align: center; }
+.mem-back { color: var(--accent); text-decoration: none; font-size: 16px; }
+.mem-page { max-width: 720px; margin: 0 auto; padding: 12px 16px calc(40px + env(safe-area-inset-bottom)); }
+.mem-page h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 24px 0 6px; }
+.mem-page label { font-size: 13px; color: var(--muted); }
+.mem-page label.inline { display: flex; align-items: center; gap: 6px; }
+.mem-page select, .mem-page textarea, .mem-page input[type="search"] {
+  display: block; width: 100%; padding: 9px 10px; border-radius: 10px; background: var(--tile);
+  border: 1px solid var(--line); color: var(--text); font-size: 16px;
+}
+.mem-page .row select { width: auto; flex: 0 1 auto; }
+.mem-pickers { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mem-pickers select { margin-top: 4px; }
+.mem-add { margin: 14px 0; padding: 12px; border: 1px solid var(--line); border-radius: 14px; display: flex; flex-direction: column; gap: 8px; }
+.mem-add textarea { resize: vertical; }
+.mem-tools { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.mem-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.mem-item {
+  display: grid; grid-template-columns: 34px 1fr 34px; gap: 6px; align-items: start; padding: 8px 6px;
+  background: var(--tile); border: 1px solid transparent; border-radius: 12px;
+}
+.mem-item.core { border-color: rgba(245, 197, 66, 0.5); background: linear-gradient(0deg, rgba(245, 197, 66, 0.06), rgba(245, 197, 66, 0.06)), var(--tile); }
+.mem-item .star, .mem-item .del { background: none; border: 0; cursor: pointer; font-size: 20px; line-height: 1; padding: 4px; color: var(--muted); }
+.mem-item.core .star { color: #f5c542; }
+.mem-item .del { font-size: 16px; opacity: 0.7; }
+.mem-text { padding: 2px 4px; border-radius: 6px; outline: none; line-height: 1.4; word-break: break-word; }
+.mem-text:focus { background: var(--bg); box-shadow: 0 0 0 1px var(--accent); }
+.mem-meta { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); padding: 2px 4px 0; }
+.mem-page .mem-meta select { width: auto; padding: 2px 4px; font-size: 12px; border-radius: 6px; background: transparent; border-color: transparent; color: var(--muted); }
+.mem-empty { color: var(--muted); font-size: 14px; padding: 6px 4px; }
+.mem-danger { margin-top: 16px; }
+.mem-toast { position: fixed; top: auto; bottom: calc(20px + env(safe-area-inset-bottom)); }
+.core-preview { list-style: none; padding: 0; margin: 0 0 8px; font-size: 14px; }
+.core-preview li { padding: 6px 8px; border-radius: 8px; background: var(--tile); margin-bottom: 4px; }
+.core-preview li::before { content: "★ "; color: #f5c542; }
+.core-preview .empty { background: none; color: var(--muted); }
+.core-preview .empty::before { content: ""; }

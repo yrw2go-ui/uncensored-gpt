@@ -1,4 +1,6 @@
 // Turns a character + what it remembers about the user into the system prompt.
+const RECENT = 40; // non-core memories of each kind sent to the model (all core ones always are)
+
 export const TRAITS = ["warmth", "humor", "sarcasm", "energy", "curiosity", "formality"];
 
 const TRAIT_WORDS = {
@@ -30,7 +32,7 @@ function ago(ts) {
 
 /**
  * @param c character
- * @param who { name, recognizedBy, facts, summary, lastSeen, calls }
+ * @param who { name, recognizedBy, facts, moments, summary, lastSeen, calls }
  */
 export function compilePrompt(c, who = {}) {
   const lines = [`You are ${c.name}${c.tagline ? `, ${c.tagline}` : ""}.`];
@@ -55,8 +57,15 @@ export function compilePrompt(c, who = {}) {
   } else {
     lines.push("You don't know who you're talking to yet. Early on, warmly ask their name.");
   }
-  if (who.facts?.length) lines.push(`What you remember about them:\n${who.facts.map((f) => `- ${f}`).join("\n")}`);
+  const all = [...(who.facts || []), ...(who.moments || [])];
+  const core = all.filter((m) => m.core);
+  const about = (who.facts || []).filter((m) => !m.core).slice(-RECENT);
+  const moments = (who.moments || []).filter((m) => !m.core).slice(-RECENT);
+  const bullet = (items) => items.map((m) => `- ${m.text}`).join("\n");
+  if (core.length) lines.push(`Core memories (the most important things; never contradict or forget these):\n${bullet(core)}`);
+  if (about.length) lines.push(`Other things you know about them:\n${bullet(about)}`);
+  if (moments.length) lines.push(`Moments you've shared:\n${bullet(moments)}`);
   if (who.summary) lines.push(`Your relationship so far: ${who.summary}`);
-  if (who.facts?.length || who.summary) lines.push("Bring these memories up naturally when relevant, like a friend would. Don't recite them.");
+  if (all.length || who.summary) lines.push("Bring these memories up naturally when relevant, like a friend would. Don't recite them.");
   return lines.join("\n");
 }

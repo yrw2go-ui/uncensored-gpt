@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f1115" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="icon-192.png" />
+    <link rel="stylesheet" href="style.css" />
+    <title>Memories · AI Companion</title>
+  </head>
+  <body class="mem-body">
+    <header class="mem-header">
+      <a href="/" class="mem-back" aria-label="Back to the call">‹ Back</a>
+      <h1>Memories</h1>
+      <span></span>
+    </header>
+
+    <main class="mem-page">
+      <div class="mem-pickers">
+        <label>Person <select id="sel-profile"></select></label>
+        <label>Character <select id="sel-character"></select></label>
+      </div>
+      <p class="hint" id="mem-intro"></p>
+
+      <form id="add-form" class="mem-add">
+        <textarea id="add-text" rows="2" placeholder="Add a memory… e.g. “Their mom's name is Rosa” or “We joked about pineapple pizza”"></textarea>
+        <div class="row wrap">
+          <select id="add-kind">
+            <option value="about">About them</option>
+            <option value="moment">A moment we shared</option>
+          </select>
+          <label class="inline"><input type="checkbox" id="add-core" /> ⭐ Core memory</label>
+          <button class="btn primary small">Add</button>
+        </div>
+      </form>
+
+      <div class="mem-tools">
+        <input id="search" type="search" placeholder="Search memories" />
+        <div class="seg" id="filter">
+          <button data-f="all" class="on">All</button>
+          <button data-f="core">⭐ Core</button>
+          <button data-f="about">About</button>
+          <button data-f="moment">Moments</button>
+        </div>
+      </div>
+
+      <section data-sec="core">
+        <h2>⭐ Core memories</h2>
+        <p class="hint">Always remembered, in every call. Core memories and anything you write or edit are locked: they never get changed or deleted automatically.</p>
+        <ul class="mem-list" id="list-core"></ul>
+      </section>
+      <section data-sec="about">
+        <h2 id="about-title">About them</h2>
+        <ul class="mem-list" id="list-about"></ul>
+      </section>
+      <section data-sec="moment">
+        <h2>Moments together</h2>
+        <ul class="mem-list" id="list-moment"></ul>
+      </section>
+
+      <section>
+        <h2>Relationship so far</h2>
+        <textarea id="summary" rows="4" placeholder="How the character sees your relationship. Updated as you talk; edit freely."></textarea>
+        <p class="hint" id="summary-status"></p>
+      </section>
+
+      <section class="mem-danger">
+        <h2>Forget</h2>
+        <div class="row wrap">
+          <button id="btn-forget-rel" class="btn small">Forget this relationship</button>
+          <button id="btn-forget-all" class="btn small danger">Forget everything about this person</button>
+        </div>
+      </section>
+    </main>
+    <div id="toast" class="toast mem-toast" hidden></div>
+    <script type="module" src="js/memories.js"></script>
+  </body>
+</html>

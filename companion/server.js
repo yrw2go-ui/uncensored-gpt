@@ -262,15 +262,71 @@ function deleteProfile(req, res, id) {
 }
 
 // ---------- memory ----------
-// facts_<profile>            facts about the person, shared by every character
-// rel_<profile>_<character>  that character's relationship summary + recent conversation
+// facts_<profile>            things about the person, shared by every character   (kind "about")
+// rel_<profile>_<character>  that character's moments with them, relationship summary, recent chat (kind "moment")
+// Each memory: { id, text, kind, core, source: "learned" | "you", createdAt, updatedAt }.
+// Core memories always reach the prompt. Core memories and anything the user wrote or edited are
+// locked: the automatic learner can add new memories but never changes or deletes locked ones.
 const factsKey = (profile) => `facts_${profile}`;
 const relKey = (profile, character) => `rel_${profile}_${character}`;
+const MAX_MOMENTS = 200;
+const KINDS = ["about", "moment"];
+
+function toItem(m, kind) {
+  if (typeof m === "string") m = { text: m }; // migrate old plain-text facts
+  return {
+    id: m.id || Store.id(),
+    text: str(m.text, 400),
+    kind,
+    core: Boolean(m.core),
+    source: m.source === "you" ? "you" : "learned",
+    createdAt: m.createdAt || Date.now(),
+    updatedAt: m.updatedAt || m.createdAt || Date.now(),
+  };
+}
+
+function readFacts(profile) {
+  const raw = store.read(factsKey(profile), { facts: [] }).facts;
+  const facts = raw.map((f) => toItem(f, "about")).filter((f) => f.text);
+  if (raw.some((f) => !f?.id)) store.write(factsKey(profile), { facts }); // persist migrated ids
+  return facts;
+}
+
+function readRel(profile, character) {
+  const rel = store.read(relKey(profile, character), {});
+  return {
+    summary: rel.summary || "",
+    history: rel.history || [],
+    lastSeen: rel.lastSeen || 0,
+    calls: rel.calls || 0,
+    moments: (rel.moments || []).map((m) => toItem(m, "moment")).filter((m) => m.text),
+  };
+}
+
+// Old data had plain strings; give them ids once so edits can find them.
+function migrateRel(profile, character) {
+  const raw = store.read(relKey(profile, character), null);
+  if (raw?.moments?.some((m) => !m?.id)) writeRel(profile, character, readRel(profile, character));
+}
+
+// Keep every core memory; trim the oldest regular ones past the cap.
+function capped(items, max) {
+  const regular = items.filter((m) => !m.core);
+  const drop = new Set(regular.slice(0, Math.max(0, items.length - max)).map((m) => m.id));
+  return items.filter((m) => !drop.has(m.id));
+}
+
+function writeFacts(profile, facts) {
+  store.write(factsKey(profile), { facts: capped(facts, MAX_FACTS) });
+}
+
+function writeRel(profile, character, rel) {
+  store.write(relKey(profile, character), { ...rel, moments: capped(rel.moments, MAX_MOMENTS) });
+}
 
 function getMemory(profile, character) {
-  const facts = store.read(factsKey(profile), { facts: [] }).facts;
-  const rel = store.read(relKey(profile, character), { summary: "", history: [], lastSeen: 0, calls: 0 });
-  return { facts, ...rel };
+  migrateRel(profile, character);
+  return { facts: readFacts(profile), ...readRel(profile, character) };
 }
 
 function memoryParams(req) {
@@ -287,19 +343,18 @@ function readMemory(req, res) {
 }
 
 async function writeMemory(req, res) {
-  const { profile = "guest", character, history, facts, summary, callStarted } = await readJsonBody(req);
+  const { profile = "guest", character, history, summary, callStarted } = await readJsonBody(req);
   if (!character) throw httpError(400, "character is required");
-  const rel = store.read(relKey(profile, character), { summary: "", history: [], lastSeen: 0, calls: 0 });
+  const rel = readRel(profile, character);
   if (Array.isArray(history)) {
     rel.history = history
       .filter((m) => ["user", "assistant"].includes(m.role) && typeof m.content === "string")
       .slice(-MAX_HISTORY);
   }
   if (typeof summary === "string") rel.summary = str(summary);
-  if (callStarted) rel.calls = (rel.calls || 0) + 1;
+  if (callStarted) rel.calls += 1;
   rel.lastSeen = Date.now();
-  store.write(relKey(profile, character), rel);
-  if (Array.isArray(facts)) store.write(factsKey(profile), { facts: facts.map((f) => str(f, 300)).filter(Boolean).slice(-MAX_FACTS) });
+  writeRel(profile, character, rel);
   sendJson(res, 200, getMemory(profile, character));
 }
 
@@ -310,7 +365,57 @@ function forgetMemory(req, res) {
   sendJson(res, 200, getMemory(profile, character));
 }
 
-/** Asks the LLM what it learned about the user from recent turns, then merges it into memory. */
+// --- single memories (the Memories page) ---
+async function addMemoryItem(req, res) {
+  const { profile = "guest", character, text, kind = "about", core = false } = await readJsonBody(req);
+  if (!character || !KINDS.includes(kind)) throw httpError(400, "character and a valid kind are required");
+  const item = toItem({ text, core, source: "you" }, kind);
+  if (!item.text) throw httpError(400, "Memory text is empty");
+  if (kind === "about") writeFacts(profile, [...readFacts(profile), item]);
+  else {
+    const rel = readRel(profile, character);
+    rel.moments.push(item);
+    writeRel(profile, character, rel);
+  }
+  sendJson(res, 200, getMemory(profile, character));
+}
+
+/** Edit text / core flag, or move a memory between "about" and "moment". */
+async function updateMemoryItem(req, res, id) {
+  const { profile = "guest", character, text, core, kind } = await readJsonBody(req);
+  if (!character) throw httpError(400, "character is required");
+  const facts = readFacts(profile);
+  const rel = readRel(profile, character);
+  const list = facts.some((f) => f.id === id) ? facts : rel.moments;
+  const item = list.find((m) => m.id === id);
+  if (!item) throw httpError(404, "No such memory");
+  if (typeof text === "string") {
+    if (!str(text)) throw httpError(400, "Memory text is empty");
+    item.text = str(text, 400);
+    item.source = "you";
+  }
+  if (typeof core === "boolean") item.core = core;
+  item.updatedAt = Date.now();
+  if (kind && KINDS.includes(kind) && kind !== item.kind) {
+    list.splice(list.indexOf(item), 1);
+    item.kind = kind;
+    (kind === "about" ? facts : rel.moments).push(item);
+  }
+  writeFacts(profile, facts);
+  writeRel(profile, character, rel);
+  sendJson(res, 200, getMemory(profile, character));
+}
+
+function deleteMemoryItem(req, res, id) {
+  const { profile, character } = memoryParams(req);
+  writeFacts(profile, readFacts(profile).filter((f) => f.id !== id));
+  const rel = readRel(profile, character);
+  rel.moments = rel.moments.filter((m) => m.id !== id);
+  writeRel(profile, character, rel);
+  sendJson(res, 200, getMemory(profile, character));
+}
+
+/** Asks the LLM what it learned from recent turns, then merges it into memory. Core memories are never touched. */
 async function learn(req, res) {
   const { profile = "guest", character: characterId, turns = [], provider, model } = await readJsonBody(req);
   const character = getCharacters().find((c) => c.id === characterId);
@@ -321,7 +426,10 @@ async function learn(req, res) {
     .join("\n");
   if (!convo.trim()) return sendJson(res, 200, { memory: getMemory(profile, characterId) });
 
-  const mem = getMemory(profile, characterId);
+  const facts = readFacts(profile);
+  const rel = readRel(profile, characterId);
+  const locked = (m) => m.core || m.source === "you";
+  const list = (items) => items.map((m) => `[${m.id}]${locked(m) ? " (LOCKED)" : ""} ${m.text}`).join("\n") || "(none)";
   const p = resolveProvider(providers, provider);
   const out = await chatJson(
     p,
@@ -330,27 +438,46 @@ async function learn(req, res) {
       {
         role: "system",
         content: `You maintain long-term memory for ${character.name}, an AI companion, about the human they talk to.
-From the new conversation, extract durable facts about the USER worth remembering next time: name, preferences, people and pets in their life, job, plans, events, feelings, inside jokes. Skip trivia about the conversation itself and anything only the character said.
+From the new conversation, pick out what's worth remembering next time:
+- "about": durable facts about the USER (name, people and pets in their life, job, preferences, plans, health, feelings, values).
+- "moment": notable things that happened between you two (a story they told, a joke you share, a promise, a celebration, a hard conversation).
+Skip small talk and anything only the character said. Mark something "core" only if it is truly important to who they are or to your relationship (e.g. a loved one's name, a major life event, a deep fear or dream).
+Never update or remove items marked (LOCKED); you may add a new item if something about them changed.
 Reply with ONLY JSON:
 {"user_name": "their first name if they said it, else null",
- "add": ["new short facts written in third person, e.g. 'Has a dog named Biscuit'"],
- "remove": [indexes of KNOWN FACTS that are now wrong or duplicated],
- "relationship_summary": "2-4 sentences, from ${character.name}'s point of view, about your relationship and what you've talked about so far"}`,
+ "add": [{"text": "short, third person, e.g. 'Has a dog named Biscuit'", "kind": "about" | "moment", "core": true | false}],
+ "update": [{"id": "existing id", "text": "corrected text"}],
+ "remove": ["ids of unlocked items that are now wrong or duplicated"],
+ "relationship_summary": "2-4 sentences, from ${character.name}'s point of view, about your relationship so far"}`,
       },
       {
         role: "user",
-        content: `KNOWN FACTS:\n${mem.facts.map((f, i) => `${i}. ${f}`).join("\n") || "(none)"}\n\nPREVIOUS RELATIONSHIP SUMMARY:\n${mem.summary || "(first conversation)"}\n\nNEW CONVERSATION:\n${convo}`,
+        content: `KNOWN ABOUT THEM:\n${list(facts)}\n\nMOMENTS YOU'VE SHARED:\n${list(rel.moments)}\n\nPREVIOUS RELATIONSHIP SUMMARY:\n${rel.summary || "(first conversation)"}\n\nNEW CONVERSATION:\n${convo}`,
       },
     ],
     { temperature: 0.2 },
   );
 
-  const remove = new Set((out.remove || []).map(Number));
-  const facts = mem.facts.filter((_, i) => !remove.has(i));
-  for (const f of out.add || []) {
-    const s = str(f, 300);
-    if (s && !facts.some((x) => x.toLowerCase() === s.toLowerCase())) facts.push(s);
+  const all = [...facts, ...rel.moments];
+  const editable = (id) => all.find((m) => m.id === id && !locked(m));
+  const remove = new Set((out.remove || []).map(String).filter(editable));
+  for (const u of out.update || []) {
+    const item = editable(String(u?.id));
+    if (item && str(u.text)) Object.assign(item, { text: str(u.text, 400), source: "learned", updatedAt: Date.now() });
   }
+  const newFacts = facts.filter((m) => !remove.has(m.id));
+  rel.moments = rel.moments.filter((m) => !remove.has(m.id));
+  const learned = [];
+  for (const a of out.add || []) {
+    const kind = KINDS.includes(a?.kind) ? a.kind : "about";
+    const item = toItem({ text: typeof a === "string" ? a : a?.text, core: a?.core }, kind);
+    const target = kind === "about" ? newFacts : rel.moments;
+    if (item.text && !target.some((x) => x.text.toLowerCase() === item.text.toLowerCase())) {
+      target.push(item);
+      learned.push(item.text);
+    }
+  }
+  if (out.relationship_summary) rel.summary = str(out.relationship_summary);
 
   let targetProfile = profile;
   let createdProfile = null;
@@ -359,18 +486,13 @@ Reply with ONLY JSON:
     // A stranger told us their name: give them a profile and move what we learned onto it.
     createdProfile = createProfile(userName);
     targetProfile = createdProfile.id;
-    const guestRel = store.read(relKey("guest", characterId), null);
-    if (guestRel) store.write(relKey(targetProfile, characterId), guestRel);
     store.remove(relKey("guest", characterId));
     store.remove(factsKey("guest"));
   }
+  writeFacts(targetProfile, newFacts);
+  writeRel(targetProfile, characterId, rel);
 
-  store.write(factsKey(targetProfile), { facts: facts.slice(-MAX_FACTS) });
-  const rel = store.read(relKey(targetProfile, characterId), { summary: "", history: [], lastSeen: 0, calls: 0 });
-  if (out.relationship_summary) rel.summary = str(out.relationship_summary);
-  store.write(relKey(targetProfile, characterId), rel);
-
-  sendJson(res, 200, { memory: getMemory(targetProfile, characterId), createdProfile, learned: out.add || [] });
+  sendJson(res, 200, { memory: getMemory(targetProfile, characterId), createdProfile, learned });
 }
 
 // ---------- LLM / voice / avatar proxies ----------
@@ -551,6 +673,9 @@ const routes = [
   ["PUT", "/api/memory", writeMemory],
   ["DELETE", "/api/memory", forgetMemory],
   ["POST", "/api/memory/learn", learn],
+  ["POST", "/api/memory/items", addMemoryItem],
+  ["PATCH", /^\/api\/memory\/items\/([\w-]+)$/, updateMemoryItem],
+  ["DELETE", /^\/api\/memory\/items\/([\w-]+)$/, deleteMemoryItem],
   ["GET", "/api/push/key", (req, res) => sendJson(res, 200, { publicKey: push.publicKey })],
   ["POST", "/api/push/subscribe", async (req, res) => {
     const { subscription, profile } = await readJsonBody(req);

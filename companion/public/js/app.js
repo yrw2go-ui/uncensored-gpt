@@ -32,7 +32,7 @@ let character = null;
 let profiles = [];
 let profileId = local.get("profile", GUEST);
 let recognizedBy = ""; // "face" | "voice" | "" (picked manually)
-let memory = { facts: [], summary: "", history: [], lastSeen: 0, calls: 0 };
+let memory = { facts: [], moments: [], summary: "", history: [], lastSeen: 0, calls: 0 };
 let history = [];
 let learnedUpTo = 0; // history index already sent to the memory learner
 let learning = null;
@@ -410,25 +410,21 @@ async function loadMemory({ keepHistory = false } = {}) {
 }
 
 function renderMemory() {
-  const ul = $("facts");
+  const all = [...(memory.facts || []), ...(memory.moments || [])];
+  const core = all.filter((m) => m.core);
+  $("memory-counts").textContent = all.length
+    ? `${core.length} core · ${all.length - core.length} other memories`
+    : "Nothing yet. They'll pick things up as you talk.";
+  const ul = $("core-preview");
   ul.innerHTML = "";
-  if (!memory.facts.length) {
-    ul.innerHTML = `<li class="empty">Nothing yet. They'll pick things up as you talk.</li>`;
-  }
-  memory.facts.forEach((f, i) => {
+  for (const m of core.slice(-5)) {
     const li = document.createElement("li");
-    li.innerHTML = `<span></span><button title="Forget this">✕</button>`;
-    li.firstChild.textContent = f;
-    li.lastChild.onclick = () => saveFacts(memory.facts.filter((_, j) => j !== i));
+    li.textContent = m.text;
     ul.appendChild(li);
-  });
-  $("inp-summary").value = memory.summary || "";
+  }
+  if (all.length && !core.length) ul.innerHTML = `<li class="empty">No core memories yet. Star the important ones on the memories page.</li>`;
+  $("btn-memories").href = `memories.html?profile=${encodeURIComponent(profileId)}&character=${encodeURIComponent(character.id)}`;
   renderPromptPreview();
-}
-
-async function saveFacts(facts) {
-  memory = await api("/api/memory", { method: "PUT", body: { profile: profileId, character: character.id, facts } });
-  renderMemory();
 }
 
 const saveHistory = debounce(() => {
@@ -1073,36 +1069,18 @@ function wireEvents() {
     await loadProfiles();
     toast("Face and voice prints deleted.");
   };
-  $("fact-form").onsubmit = (e) => {
-    e.preventDefault();
-    const f = $("inp-fact").value.trim();
-    $("inp-fact").value = "";
-    if (f) saveFacts([...memory.facts, f]);
-  };
-  $("inp-summary").onchange = async () => {
-    memory = await api("/api/memory", {
-      method: "PUT",
-      body: { profile: profileId, character: character.id, summary: $("inp-summary").value },
-    });
-    renderPromptPreview();
-  };
   $("btn-learn").onclick = () => learnNow({ quiet: false });
-  $("btn-forget-rel").onclick = async () => {
-    if (!confirm(`Make ${character.name} forget your conversations and relationship?`)) return;
-    memory = await api(`/api/memory?profile=${profileId}&character=${character.id}`, { method: "DELETE" });
-    history = [];
-    learnedUpTo = 0;
-    renderHistory();
-    renderMemory();
+  // Mid-call, open the memories page in a new tab so the call keeps going.
+  $("btn-memories").onclick = (e) => {
+    if (!inCall) return;
+    e.preventDefault();
+    window.open($("btn-memories").href, "_blank");
   };
-  $("btn-forget-all").onclick = async () => {
-    if (!confirm("Forget every fact about you, plus this relationship?")) return;
-    memory = await api(`/api/memory?profile=${profileId}&character=${character.id}&scope=all`, { method: "DELETE" });
-    history = [];
-    learnedUpTo = 0;
-    renderHistory();
-    renderMemory();
-  };
+  // Pick up edits made on the memories page when coming back.
+  addEventListener("pageshow", (e) => e.persisted && character && loadMemory());
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && character) loadMemory({ keepHistory: inCall }).catch(() => {});
+  });
 
   // settings
   $("sel-provider").onchange = () => (onProviderChange(), saveSettings());

@@ -88,7 +88,12 @@ The browser voice can't be captured as audio. So with it, the cartoon and 3D mou
 - **Strangers:** as a guest, the character asks your name. When you say it, a profile is created automatically, and your face and voice prints are attached if recognition is on.
 - **Face recognition:** [face-api.js](https://github.com/vladmandic/face-api) runs in the browser. Click "Teach my face", or let it learn you as above. With the camera on, it recognizes you at the start of a call and greets you by name.
 - **Voice recognition (experimental):** a simple voiceprint based on the shape of your voice's frequencies. It can tell a few people in a household apart in a quiet room. It's not secure, and face or name are more reliable.
-- You can see, add and delete every remembered fact, edit the relationship summary, or wipe it all.
+- **Memories page** (You → 🧠 Open memories, or `/memories.html`): every memory for a person and character, newest first, with search and filters.
+  - **⭐ Core memories** are the most important ones. They're always sent to the model, which is told never to contradict them. Star or unstar anything.
+  - **About them:** facts about the person, shared by every character.
+  - **Moments together:** things that happened in this relationship.
+  - Tap any memory to edit it in place. You can also move it between types, delete it, add your own, or edit the relationship summary.
+  - **Locked:** core memories and anything you wrote or edited are never changed or deleted by automatic learning, which only adds new ones.
 
 **Privacy:** everything stays in `companion/data/` on the machine running the server. For faces and voices, only numeric prints are saved, never photos or audio. Get people's consent before enrolling them. Biometric data is regulated in some places (for example under GDPR, or Illinois' BIPA).
 
