@@ -4,6 +4,10 @@ import { createPersistStore } from "@/app/utils/store";
 import { nanoid } from "nanoid";
 import { useAccessStore } from "./access";
 import {
+  extractSafetensors,
+  withSafetensorsMetadata,
+} from "@/app/utils/safetensors";
+import {
   BaseModel,
   LoraType,
   TrainerSchema,
@@ -82,6 +86,24 @@ export type LoraJob = {
   step?: number;
   queuePosition?: number;
   localSamples?: string[];
+};
+
+// the file name used for downloads and in ComfyUI workflows
+export function loraFileName(job: LoraJob) {
+  const slug =
+    job.name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "lora";
+  return `${slug}.safetensors`;
+}
+
+// modelspec architecture ids, for tools that read safetensors metadata
+const ARCHITECTURES: Record<string, string> = {
+  "flux-dev": "flux-1-dev/lora",
+  "flux-fast": "flux-1-dev/lora",
+  "flux-schnell": "flux-1-schnell/lora",
+  sdxl: "stable-diffusion-xl-v1-base/lora",
 };
 
 export function isLoraDone(status: LoraStatus) {
@@ -209,6 +231,51 @@ export const useLoraStore = createPersistStore(
     }
 
     const methods = {
+      // Fetches a finished LoRA, unpacks it if the trainer returned an
+      // archive, and stamps name / trigger word / base model into it.
+      async getSafetensors(jobId: string): Promise<Blob> {
+        const job = _get().jobs.find((j) => j.id === jobId);
+        if (!job?.weights) throw new Error("This LoRA has no weights yet");
+
+        let res: Response;
+        if (job.backend === "local") {
+          res = await fetch(methods.localFileUrl(job.weights));
+        } else {
+          try {
+            res = await fetch(job.weights);
+          } catch {
+            // the file host may not allow cross-origin downloads
+            res = await fetch(
+              `${ApiPath.Replicate}/download?url=${encodeURIComponent(job.weights)}`,
+              { headers: headers(false) },
+            );
+          }
+        }
+        if (!res.ok) {
+          throw new Error(
+            res.status === 404 || res.status === 410
+              ? "The trained weights have expired on Replicate. Download them from replicate.com instead."
+              : `Couldn't download weights (HTTP ${res.status})`,
+          );
+        }
+
+        const weights = await extractSafetensors(
+          new Uint8Array(await res.arrayBuffer()),
+        );
+        const metadata: Record<string, string> = {
+          "modelspec.sai_model_spec": "1.0.0",
+          "modelspec.title": job.name,
+          "modelspec.trigger_phrase": job.triggerWord,
+          "modelspec.date": new Date(job.createdAt).toISOString(),
+          "lora_studio.base_model": job.baseModel,
+          "lora_studio.lora_type": job.loraType,
+          "lora_studio.trainer": job.trainer,
+        };
+        const arch = job.modelId && ARCHITECTURES[job.modelId];
+        if (arch) metadata["modelspec.architecture"] = arch;
+        return withSafetensorsMetadata(weights, metadata);
+      },
+
       setBackend(backend: LoraBackend) {
         set({ backend });
       },

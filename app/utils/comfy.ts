@@ -580,8 +580,7 @@ export function comfyReadme(opts: {
   template: ComfyTemplate;
   loraName: string;
   loraFile: string;
-  loraIncluded: boolean;
-  weightsUrl?: string;
+  cloudSdxl: boolean;
   triggerWord: string;
   prompt: string;
   workflowFile: string;
@@ -590,28 +589,26 @@ export function comfyReadme(opts: {
   const lines = [
     `${opts.loraName}: ComfyUI workflow (${template.name})`,
     "",
-    "1. Put the LoRA in ComfyUI/models/loras/",
-    opts.loraIncluded
-      ? `   It's included in this zip as ComfyUI/models/loras/${opts.loraFile}`
-      : `   Download it from ${opts.weightsUrl ?? "LoRA Studio"}. If it's an archive (.tar/.zip),\n   extract the .safetensors file. Save it as ${opts.loraFile}`,
+    "1. Copy the ComfyUI folder from this zip over your ComfyUI install.",
+    `   That puts the LoRA at ComfyUI/models/loras/${opts.loraFile}`,
     "",
     `2. Make sure ComfyUI has the ${template.name} base model files:`,
     ...template.files.map(
       (f) => `   - ComfyUI/${f.folder}/${f.file}\n     ${f.url}`,
     ),
     "",
-    `3. Drag ${opts.workflowFile} onto the ComfyUI window and press Queue.`,
+    `3. Drag ${opts.workflowFile} onto the ComfyUI window and press Run.`,
     "",
     `Prompt: "${opts.prompt}"`,
     `Use the trigger word "${opts.triggerWord}" in your prompts to activate the LoRA.`,
     "Lower the LoRA strength (0.6-0.9) if results look overcooked.",
   ];
-  if (template.id === "sdxl" && !opts.loraIncluded) {
+  if (opts.cloudSdxl) {
     lines.push(
       "",
-      "Note: Replicate's SDXL trainer also learns token embeddings (embeddings.pti in",
-      "the archive). ComfyUI only loads the LoRA, so describe the subject in words",
-      "alongside the trigger word for best results.",
+      "Note: Replicate's SDXL trainer also learns token embeddings, which ComfyUI's",
+      "LoRA loader doesn't use. Describe the subject in words alongside the",
+      "trigger word for best results.",
     );
   }
   return lines.join("\n") + "\n";

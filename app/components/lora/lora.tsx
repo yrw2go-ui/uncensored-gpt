@@ -27,6 +27,7 @@ import {
   TrainerSchema,
   findRoleField,
   isLoraDone,
+  loraFileName,
   roleKeys,
   useLoraStore,
 } from "@/app/store/lora";
@@ -170,23 +171,14 @@ function downloadBlob(blob: Blob, filename: string) {
 
 // zip with a ComfyUI workflow, its API-format twin, setup notes and, for
 // local trainings, the LoRA itself
-async function exportComfy(
-  job: LoraJob,
-  localFileUrl: (path: string) => string,
-) {
+// zip with a ComfyUI workflow, its API-format twin, setup notes and the
+// LoRA itself, ready to drop into a ComfyUI folder
+async function exportComfy(job: LoraJob, safetensors: Blob) {
   const template = comfyTemplateFor(job.modelId);
   if (!template) throw new Error("No ComfyUI template for this base model");
 
-  const slug =
-    job.name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "") || "lora";
-  const isLocal = job.backend === "local";
-  const loraFile =
-    isLocal && job.weights
-      ? job.weights.split("/").pop()!
-      : `${slug}.safetensors`;
+  const loraFile = loraFileName(job);
+  const slug = loraFile.replace(/\.safetensors$/, "");
   const loraType = LORA_TYPES.find((t) => t.name === job.loraType);
   const prompt = (loraType ?? LORA_TYPES[0]).caption(job.triggerWord);
   const { workflow, api } = buildComfyWorkflow(template, loraFile, prompt);
@@ -202,34 +194,25 @@ async function exportComfy(
       name: `${slug}_workflow_api.json`,
       data: encoder.encode(JSON.stringify(api, null, 2)),
     },
-  ];
-
-  let loraIncluded = false;
-  if (isLocal && job.weights) {
-    const res = await fetch(localFileUrl(job.weights));
-    if (!res.ok) throw new Error(`Couldn't fetch LoRA weights (${res.status})`);
-    entries.push({
+    {
       name: `ComfyUI/models/loras/${loraFile}`,
-      data: new Uint8Array(await res.arrayBuffer()),
-    });
-    loraIncluded = true;
-  }
-
-  entries.push({
-    name: "README.txt",
-    data: encoder.encode(
-      comfyReadme({
-        template,
-        loraName: job.name,
-        loraFile,
-        loraIncluded,
-        weightsUrl: isLocal ? undefined : job.weights,
-        triggerWord: job.triggerWord,
-        prompt,
-        workflowFile,
-      }),
-    ),
-  });
+      data: new Uint8Array(await safetensors.arrayBuffer()),
+    },
+    {
+      name: "README.txt",
+      data: encoder.encode(
+        comfyReadme({
+          template,
+          loraName: job.name,
+          loraFile,
+          cloudSdxl: job.modelId === "sdxl" && job.backend !== "local",
+          triggerWord: job.triggerWord,
+          prompt,
+          workflowFile,
+        }),
+      ),
+    },
+  ];
 
   downloadBlob(createZip(entries), `${slug}_comfyui.zip`);
 }
@@ -239,12 +222,23 @@ function JobCard(props: { job: LoraJob }) {
   const store = useLoraStore();
   const [prompt, setPrompt] = useState(`a photo of ${job.triggerWord}`);
   const [showLogs, setShowLogs] = useState(false);
-  const [exporting, setExporting] = useState(false);
+  const [busy, setBusy] = useState<"" | "download" | "comfy">("");
   const comfyTemplate = comfyTemplateFor(job.modelId);
   const running = !isLoraDone(job.status);
   const isLocal = job.backend === "local";
-  const weightsUrl =
-    job.weights && (isLocal ? store.localFileUrl(job.weights) : job.weights);
+
+  // both buttons need the unpacked, stamped .safetensors
+  function withSafetensors(
+    kind: "download" | "comfy",
+    then: (file: Blob) => void | Promise<void>,
+  ) {
+    setBusy(kind);
+    store
+      .getSafetensors(job.id)
+      .then(then)
+      .catch((e) => showToast(e.message))
+      .finally(() => setBusy(""));
+  }
   const statusText =
     job.status === "queued" && job.queuePosition
       ? `queued (#${job.queuePosition})`
@@ -336,14 +330,20 @@ function JobCard(props: { job: LoraJob }) {
       {job.status === "succeeded" && (
         <>
           <div className={styles["job-links"]}>
-            {weightsUrl && (
-              <a href={weightsUrl} target="_blank" rel="noreferrer">
-                <IconButton
-                  icon={<DownloadIcon />}
-                  text="Download weights"
-                  bordered
-                />
-              </a>
+            {job.weights && (
+              <IconButton
+                icon={<DownloadIcon />}
+                text={
+                  busy === "download" ? "Preparing…" : "Download .safetensors"
+                }
+                bordered
+                disabled={!!busy}
+                onClick={() =>
+                  withSafetensors("download", (file) =>
+                    downloadBlob(file, loraFileName(job)),
+                  )
+                }
+              />
             )}
             {job.destination && (
               <a
@@ -356,15 +356,12 @@ function JobCard(props: { job: LoraJob }) {
             )}
             {comfyTemplate && job.weights && (
               <IconButton
-                text={exporting ? "Preparing…" : "Export for ComfyUI"}
+                text={busy === "comfy" ? "Preparing…" : "Export for ComfyUI"}
                 bordered
-                disabled={exporting}
-                onClick={() => {
-                  setExporting(true);
-                  exportComfy(job, store.localFileUrl)
-                    .catch((e) => showToast(e.message))
-                    .finally(() => setExporting(false));
-                }}
+                disabled={!!busy}
+                onClick={() =>
+                  withSafetensors("comfy", (file) => exportComfy(job, file))
+                }
               />
             )}
           </div>

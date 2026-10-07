@@ -30,6 +30,9 @@ export async function handle(
   }
 
   const path = params.path.join("/");
+  if (path === "download") {
+    return download(req);
+  }
   if (!ALLOWED_PATHS.some((re) => re.test(path))) {
     return NextResponse.json(
       { error: true, message: `path not allowed: ${path}` },
@@ -96,4 +99,45 @@ export async function handle(
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+// Streams a trained model's output file from Replicate's file host, for
+// browsers that can't fetch it cross-origin. Only replicate.delivery URLs
+// are allowed, so this can't be used as an open proxy.
+async function download(req: NextRequest) {
+  const authResult = auth(req, ModelProvider.Stability);
+  if (authResult.error) {
+    return NextResponse.json(authResult, { status: 401 });
+  }
+
+  let url: URL;
+  try {
+    url = new URL(req.nextUrl.searchParams.get("url") ?? "");
+  } catch {
+    return NextResponse.json(
+      { error: true, message: "bad url" },
+      { status: 400 },
+    );
+  }
+  const host = url.hostname;
+  if (
+    url.protocol !== "https:" ||
+    !(host === "replicate.delivery" || host.endsWith(".replicate.delivery"))
+  ) {
+    return NextResponse.json(
+      {
+        error: true,
+        message: "only replicate.delivery files can be downloaded",
+      },
+      { status: 403 },
+    );
+  }
+
+  const res = await fetch(url, { redirect: "follow" });
+  const headers = new Headers();
+  for (const h of ["content-type", "content-length"]) {
+    const v = res.headers.get(h);
+    if (v) headers.set(h, v);
+  }
+  return new Response(res.body, { status: res.status, headers });
 }
