@@ -60,6 +60,8 @@ export type LoraJob = {
   id: string;
   backend?: LoraBackend;
   name: string;
+  // base model id (BASE_MODELS or local trainer model), used for exports
+  modelId?: string;
   baseModel: string;
   loraType: string;
   trainer: string;
@@ -247,6 +249,7 @@ export const useLoraStore = createPersistStore(
           id: nanoid(),
           backend: "local",
           name: opts.name,
+          modelId: opts.model.id,
           baseModel: opts.model.name,
           loraType: opts.loraType.name,
           trainer: "ai-toolkit",
@@ -320,6 +323,7 @@ export const useLoraStore = createPersistStore(
         const job: LoraJob = {
           id: nanoid(),
           name: opts.name,
+          modelId: opts.baseModel.trainer ? opts.baseModel.id : undefined,
           baseModel: opts.baseModel.name,
           loraType: opts.loraType.name,
           trainer: opts.schema.trainer,
@@ -463,15 +467,33 @@ export const useLoraStore = createPersistStore(
   },
   {
     name: StoreKey.Lora,
-    version: 2.0,
-    migrate(state: any) {
+    version: 3.0,
+    migrate(state: any, version: number) {
       // v1 jobs were all trained on FLUX.1 dev
-      state.jobs = (state.jobs ?? []).map((j: any) => ({
-        baseModel: "FLUX.1 [dev]",
-        loraType: "",
-        trainer: "ostris/flux-dev-lora-trainer",
-        ...j,
-      }));
+      if (version < 2) {
+        state.jobs = (state.jobs ?? []).map((j: any) => ({
+          baseModel: "FLUX.1 [dev]",
+          loraType: "",
+          trainer: "ostris/flux-dev-lora-trainer",
+          ...j,
+        }));
+      }
+      // v2 jobs only recorded the base model's display name
+      if (version < 3) {
+        const byName: Record<string, string> = {
+          "FLUX.1 [dev]": "flux-dev",
+          "FLUX.1 (fast trainer)": "flux-fast",
+          "FLUX.1 [schnell]": "flux-schnell",
+          "Stable Diffusion XL": "sdxl",
+          "Qwen-Image": "qwen-image",
+          HunyuanVideo: "hunyuan-video",
+          "Wan 2.1 1.3B (video)": "wan21-1b",
+        };
+        state.jobs = (state.jobs ?? []).map((j: any) => ({
+          modelId: byName[j.baseModel],
+          ...j,
+        }));
+      }
       return state;
     },
   },

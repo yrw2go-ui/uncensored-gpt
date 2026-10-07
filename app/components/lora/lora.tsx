@@ -30,7 +30,12 @@ import {
   roleKeys,
   useLoraStore,
 } from "@/app/store/lora";
-import { createZip } from "@/app/utils/zip";
+import { ZipEntry, createZip } from "@/app/utils/zip";
+import {
+  buildComfyWorkflow,
+  comfyReadme,
+  comfyTemplateFor,
+} from "@/app/utils/comfy";
 import { nanoid } from "nanoid";
 
 const MIN_IMAGES = 5;
@@ -154,11 +159,88 @@ function FieldEditor(props: {
   );
 }
 
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+// zip with a ComfyUI workflow, its API-format twin, setup notes and, for
+// local trainings, the LoRA itself
+async function exportComfy(
+  job: LoraJob,
+  localFileUrl: (path: string) => string,
+) {
+  const template = comfyTemplateFor(job.modelId);
+  if (!template) throw new Error("No ComfyUI template for this base model");
+
+  const slug =
+    job.name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "lora";
+  const isLocal = job.backend === "local";
+  const loraFile =
+    isLocal && job.weights
+      ? job.weights.split("/").pop()!
+      : `${slug}.safetensors`;
+  const loraType = LORA_TYPES.find((t) => t.name === job.loraType);
+  const prompt = (loraType ?? LORA_TYPES[0]).caption(job.triggerWord);
+  const { workflow, api } = buildComfyWorkflow(template, loraFile, prompt);
+
+  const encoder = new TextEncoder();
+  const workflowFile = `${slug}_workflow.json`;
+  const entries: ZipEntry[] = [
+    {
+      name: workflowFile,
+      data: encoder.encode(JSON.stringify(workflow, null, 2)),
+    },
+    {
+      name: `${slug}_workflow_api.json`,
+      data: encoder.encode(JSON.stringify(api, null, 2)),
+    },
+  ];
+
+  let loraIncluded = false;
+  if (isLocal && job.weights) {
+    const res = await fetch(localFileUrl(job.weights));
+    if (!res.ok) throw new Error(`Couldn't fetch LoRA weights (${res.status})`);
+    entries.push({
+      name: `ComfyUI/models/loras/${loraFile}`,
+      data: new Uint8Array(await res.arrayBuffer()),
+    });
+    loraIncluded = true;
+  }
+
+  entries.push({
+    name: "README.txt",
+    data: encoder.encode(
+      comfyReadme({
+        template,
+        loraName: job.name,
+        loraFile,
+        loraIncluded,
+        weightsUrl: isLocal ? undefined : job.weights,
+        triggerWord: job.triggerWord,
+        prompt,
+        workflowFile,
+      }),
+    ),
+  });
+
+  downloadBlob(createZip(entries), `${slug}_comfyui.zip`);
+}
+
 function JobCard(props: { job: LoraJob }) {
   const { job } = props;
   const store = useLoraStore();
   const [prompt, setPrompt] = useState(`a photo of ${job.triggerWord}`);
   const [showLogs, setShowLogs] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const comfyTemplate = comfyTemplateFor(job.modelId);
   const running = !isLoraDone(job.status);
   const isLocal = job.backend === "local";
   const weightsUrl =
@@ -271,6 +353,19 @@ function JobCard(props: { job: LoraJob }) {
               >
                 <IconButton text="Open on Replicate" bordered />
               </a>
+            )}
+            {comfyTemplate && job.weights && (
+              <IconButton
+                text={exporting ? "Preparing…" : "Export for ComfyUI"}
+                bordered
+                disabled={exporting}
+                onClick={() => {
+                  setExporting(true);
+                  exportComfy(job, store.localFileUrl)
+                    .catch((e) => showToast(e.message))
+                    .finally(() => setExporting(false));
+                }}
+              />
             )}
           </div>
           {job.version && (
