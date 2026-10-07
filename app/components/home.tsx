@@ -59,6 +59,10 @@ const MaskPage = dynamic(async () => (await import("./mask")).MaskPage, {
   loading: () => <Loading noLogo />,
 });
 
+const LoraStudio = dynamic(async () => (await import("./lora")).LoraStudio, {
+  loading: () => <Loading noLogo />,
+});
+
 const Sd = dynamic(async () => (await import("./sd")).Sd, {
   loading: () => <Loading noLogo />,
 });
@@ -176,6 +180,7 @@ function Screen() {
             <Route path={Path.Masks} element={<MaskPage />} />
             <Route path={Path.Chat} element={<Chat />} />
             <Route path={Path.Settings} element={<Settings />} />
+            <Route path={Path.Lora} element={<LoraStudio />} />
           </Routes>
         </WindowContent>
       </>

@@ -27,6 +27,8 @@ export const TENCENT_BASE_URL = "https://hunyuan.tencentcloudapi.com";
 
 export const MOONSHOT_BASE_URL = "https://api.moonshot.cn";
 
+export const REPLICATE_BASE_URL = "https://api.replicate.com";
+
 export const CACHE_URL_PREFIX = "/api/cache";
 export const UPLOAD_URL = `${CACHE_URL_PREFIX}/upload`;
 
@@ -38,6 +40,7 @@ export enum Path {
   Masks = "/masks",
   Auth = "/auth",
   Sd = "/sd",
+  Lora = "/lora",
   SdNew = "/sd-new",
   Artifacts = "/artifacts",
 }
@@ -54,6 +57,7 @@ export enum ApiPath {
   Tencent = "/api/tencent",
   Moonshot = "/api/moonshot",
   Stability = "/api/stability",
+  Replicate = "/api/replicate",
   Artifacts = "/api/artifacts",
 }
 
@@ -80,6 +84,7 @@ export enum StoreKey {
   Update = "chat-update",
   Sync = "sync",
   SdList = "sd-list",
+  Lora = "lora-store",
 }
 
 export const DEFAULT_SIDEBAR_WIDTH = 300;
@@ -444,4 +449,7 @@ export const internalAllowedWebDavEndpoints = [
   "https://app.koofr.net/dav/Koofr",
 ];
 
-export const PLUGINS = [{ name: "Stable Diffusion", path: Path.Sd }];
+export const PLUGINS = [
+  { name: "Stable Diffusion", path: Path.Sd },
+  { name: "LoRA Studio", path: Path.Lora },
+];

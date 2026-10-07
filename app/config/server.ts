@@ -27,6 +27,9 @@ declare global {
       STABILITY_URL?: string;
       STABILITY_API_KEY?: string;
 
+      // replicate only (LoRA Studio)
+      REPLICATE_API_TOKEN?: string;
+
       // azure only
       AZURE_URL?: string; // https://{azure-url}/openai/deployments/{deploy-name}
       AZURE_API_KEY?: string;
@@ -151,6 +154,8 @@ export const getServerSideConfig = () => {
     isStability,
     stabilityUrl: process.env.STABILITY_URL,
     stabilityApiKey: getApiKey(process.env.STABILITY_API_KEY),
+
+    replicateApiToken: getApiKey(process.env.REPLICATE_API_TOKEN),
 
     isAzure,
     azureUrl: process.env.AZURE_URL,

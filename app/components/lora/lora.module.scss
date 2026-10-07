@@ -1,0 +1,207 @@
+@import "../../styles/animation.scss";
+
+.lora-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+
+  .lora-body {
+    padding: 20px;
+    overflow-y: auto;
+    animation: slide-in ease 0.3s;
+
+    h3 {
+      margin: 24px 0 10px;
+    }
+  }
+}
+
+.tips {
+  font-size: 12px;
+  opacity: 0.7;
+  margin-bottom: 10px;
+}
+
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 30px;
+  border: 2px dashed rgba(128, 128, 128, 0.35);
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.2s ease;
+
+  &:hover,
+  &.dragging {
+    border-color: var(--primary);
+    background-color: var(--second);
+  }
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.thumb {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  img {
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+    border-radius: 8px;
+  }
+
+  input {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    font-size: 11px;
+    text-align: left;
+  }
+
+  .thumb-remove {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.6);
+    cursor: pointer;
+
+    svg {
+      width: 12px;
+      height: 12px;
+      filter: invert(1);
+    }
+  }
+}
+
+.consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+
+.problems {
+  font-size: 12px;
+  color: var(--primary);
+  margin: 0 0 10px;
+  padding-left: 18px;
+}
+
+.error {
+  color: red;
+  font-size: 12px;
+  margin: 8px 0;
+  user-select: text;
+}
+
+.job {
+  border: var(--border-in-light);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 12px;
+  animation: slide-in ease 0.3s;
+
+  .job-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .job-title {
+    font-weight: bold;
+    font-size: 16px;
+  }
+
+  .job-meta {
+    font-size: 12px;
+    opacity: 0.7;
+    margin-top: 4px;
+  }
+
+  .job-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+  }
+
+  .logs {
+    max-height: 200px;
+    overflow: auto;
+    font-size: 11px;
+    background: var(--gray);
+    padding: 8px;
+    border-radius: 6px;
+    white-space: pre-wrap;
+  }
+
+  .job-links {
+    display: flex;
+    gap: 8px;
+    margin: 12px 0;
+    flex-wrap: wrap;
+
+    a {
+      text-decoration: none;
+      color: inherit;
+    }
+  }
+
+  .try-row {
+    display: flex;
+    gap: 8px;
+
+    input {
+      flex: 1;
+      max-width: none;
+      text-align: left;
+    }
+  }
+
+  .samples {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+  }
+
+  .sample img,
+  .sample-placeholder {
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+    border-radius: 8px;
+  }
+
+  .sample-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--gray);
+    font-size: 12px;
+    padding: 8px;
+    box-sizing: border-box;
+    text-align: center;
+  }
+}
