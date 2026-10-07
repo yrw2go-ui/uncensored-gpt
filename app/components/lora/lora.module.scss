@@ -101,6 +101,43 @@
   }
 }
 
+.inline {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+
+  input {
+    min-width: 200px;
+  }
+}
+
+.prompts {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 8px;
+  border: var(--border-in-light);
+  background: var(--white);
+  color: var(--black);
+  font-family: inherit;
+  resize: vertical;
+}
+
+.progress {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--gray);
+  margin: 10px 0;
+  overflow: hidden;
+
+  > div {
+    height: 100%;
+    background: var(--primary);
+    transition: width 0.5s ease;
+  }
+}
+
 .consent {
   display: flex;
   align-items: flex-start;

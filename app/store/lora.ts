@@ -14,7 +14,39 @@ import {
 export * from "@/app/utils/lora-trainers";
 
 export type LoraStatus =
-  "uploading" | "starting" | "processing" | "succeeded" | "failed" | "canceled";
+  | "uploading"
+  | "queued"
+  | "starting"
+  | "processing"
+  | "succeeded"
+  | "failed"
+  | "canceled";
+
+export type LoraBackend = "replicate" | "local";
+
+export const DEFAULT_LOCAL_URL = "http://127.0.0.1:8676";
+
+// a base model as reported by the local trainer (local-trainer/server.py)
+export type LocalModel = {
+  id: string;
+  name: string;
+  repo: string;
+  media: "image" | "video";
+  vram_gb: number;
+  gated: boolean;
+  note: string;
+  default_rank: number;
+  downloaded: boolean | null;
+  download?: { status: "downloading" | "done" | "failed"; error?: string };
+};
+
+export type LocalHealth = {
+  ok: boolean;
+  version: string;
+  toolkit: string;
+  toolkit_found: boolean;
+  gpus: { name: string; vram_gb: number }[];
+};
 
 export type LoraSample = {
   id: string;
@@ -26,6 +58,7 @@ export type LoraSample = {
 
 export type LoraJob = {
   id: string;
+  backend?: LoraBackend;
   name: string;
   baseModel: string;
   loraType: string;
@@ -42,6 +75,11 @@ export type LoraJob = {
   logs?: string;
   error?: string;
   samples: LoraSample[];
+  // local trainer only
+  localId?: string;
+  step?: number;
+  queuePosition?: number;
+  localSamples?: string[];
 };
 
 export function isLoraDone(status: LoraStatus) {
@@ -60,6 +98,8 @@ function slugify(name: string) {
 
 const DEFAULT_LORA_STATE = {
   replicateToken: "",
+  backend: "replicate" as LoraBackend,
+  localUrl: DEFAULT_LOCAL_URL,
   jobs: [] as LoraJob[],
 };
 
@@ -139,7 +179,114 @@ export const useLoraStore = createPersistStore(
       return `${owner}/${modelName}`;
     }
 
+    async function local(path: string, init: RequestInit = {}) {
+      const base = _get().localUrl.replace(/\/+$/, "");
+      let res: Response;
+      try {
+        res = await fetch(`${base}/${path}`, init);
+      } catch {
+        throw new Error(
+          `Can't reach the local trainer at ${base}. Is it running? (local-trainer/start.sh)`,
+        );
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      return data;
+    }
+
+    function fromLocal(j: any): Partial<LoraJob> {
+      return {
+        status: j.status,
+        step: j.step,
+        error: j.error ?? undefined,
+        logs: j.log_tail,
+        queuePosition: j.queue_position ?? undefined,
+        weights: j.weights ?? undefined,
+        localSamples: j.samples ?? [],
+      };
+    }
+
     const methods = {
+      setBackend(backend: LoraBackend) {
+        set({ backend });
+      },
+
+      setLocalUrl(url: string) {
+        set({ localUrl: url.trim() || DEFAULT_LOCAL_URL });
+      },
+
+      localFileUrl(path: string) {
+        return `${_get().localUrl.replace(/\/+$/, "")}/${path}`;
+      },
+
+      localHealth(): Promise<LocalHealth> {
+        return local("health");
+      },
+
+      async localModels(): Promise<LocalModel[]> {
+        return (await local("models")).models;
+      },
+
+      async downloadLocalModel(id: string) {
+        await local(`models/${id}/download`, { method: "POST" });
+      },
+
+      async startLocalTraining(opts: {
+        name: string;
+        model: LocalModel;
+        loraType: LoraType;
+        triggerWord: string;
+        steps: number;
+        rank: number;
+        lr: number;
+        samplePrompts: string[];
+        dataset: Blob;
+        imageCount: number;
+      }) {
+        const job: LoraJob = {
+          id: nanoid(),
+          backend: "local",
+          name: opts.name,
+          baseModel: opts.model.name,
+          loraType: opts.loraType.name,
+          trainer: "ai-toolkit",
+          triggerWord: opts.triggerWord,
+          steps: opts.steps,
+          imageCount: opts.imageCount,
+          createdAt: Date.now(),
+          status: "uploading",
+          samples: [],
+        };
+        set({ jobs: [job, ..._get().jobs] });
+
+        try {
+          const created = await local("jobs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: opts.name,
+              model: opts.model.id,
+              trigger_word: opts.triggerWord,
+              // ai-toolkit replaces [trigger] with the trigger word
+              default_caption: opts.loraType.caption("[trigger]"),
+              steps: opts.steps,
+              rank: opts.rank,
+              lr: opts.lr,
+              sample_prompts: opts.samplePrompts,
+            }),
+          });
+          patchJob(job.id, { localId: created.id });
+          const uploaded = await local(`jobs/${created.id}/dataset`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/zip" },
+            body: opts.dataset,
+          });
+          patchJob(job.id, fromLocal(uploaded));
+        } catch (e: any) {
+          patchJob(job.id, { status: "failed", error: e.message });
+        }
+      },
+
       setToken(token: string) {
         set({ replicateToken: token.trim() });
       },
@@ -218,6 +365,14 @@ export const useLoraStore = createPersistStore(
 
       async refreshJob(id: string) {
         const job = _get().jobs.find((j) => j.id === id);
+        if (job?.localId) {
+          try {
+            patchJob(id, fromLocal(await local(`jobs/${job.localId}`)));
+          } catch (e: any) {
+            console.error("[LoRA] local refresh failed", e);
+          }
+          return;
+        }
         if (!job?.trainingId) return;
         try {
           const t = await api(`v1/trainings/${job.trainingId}`);
@@ -239,6 +394,15 @@ export const useLoraStore = createPersistStore(
 
       async cancelJob(id: string) {
         const job = _get().jobs.find((j) => j.id === id);
+        if (job?.localId) {
+          patchJob(
+            id,
+            fromLocal(
+              await local(`jobs/${job.localId}/cancel`, { method: "POST" }),
+            ),
+          );
+          return;
+        }
         if (!job?.trainingId) return;
         await api(`v1/trainings/${job.trainingId}/cancel`, { method: "POST" });
         await methods.refreshJob(id);

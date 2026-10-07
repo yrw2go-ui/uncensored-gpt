@@ -20,6 +20,8 @@ import {
   BASE_MODELS,
   LORA_PRESETS,
   LORA_TYPES,
+  LocalHealth,
+  LocalModel,
   LoraJob,
   SchemaField,
   TrainerSchema,
@@ -158,6 +160,15 @@ function JobCard(props: { job: LoraJob }) {
   const [prompt, setPrompt] = useState(`a photo of ${job.triggerWord}`);
   const [showLogs, setShowLogs] = useState(false);
   const running = !isLoraDone(job.status);
+  const isLocal = job.backend === "local";
+  const weightsUrl =
+    job.weights && (isLocal ? store.localFileUrl(job.weights) : job.weights);
+  const statusText =
+    job.status === "queued" && job.queuePosition
+      ? `queued (#${job.queuePosition})`
+      : job.status === "processing" && isLocal && job.step
+        ? `${job.step}/${job.steps} steps`
+        : job.status;
 
   return (
     <div className={styles["job"]}>
@@ -165,6 +176,7 @@ function JobCard(props: { job: LoraJob }) {
         <div>
           <div className={styles["job-title"]}>{job.name}</div>
           <div className={styles["job-meta"]}>
+            {isLocal ? "This PC · " : ""}
             {job.baseModel}
             {job.loraType && ` · ${job.loraType}`} · trigger:{" "}
             <code>{job.triggerWord}</code> · {job.imageCount} files ·{" "}
@@ -173,9 +185,9 @@ function JobCard(props: { job: LoraJob }) {
         </div>
         <div className={styles["job-actions"]}>
           <span style={{ color: statusColor(job.status) }}>
-            {running && <LoadingIcon />} {job.status}
+            {running && <LoadingIcon />} {statusText}
           </span>
-          {running && job.trainingId && (
+          {running && (job.trainingId || job.localId) && (
             <IconButton
               text="Cancel"
               bordered
@@ -194,7 +206,41 @@ function JobCard(props: { job: LoraJob }) {
         </div>
       </div>
 
+      {isLocal && job.status === "processing" && (
+        <div className={styles["progress"]}>
+          <div
+            style={{
+              width: `${Math.round(((job.step ?? 0) / job.steps) * 100)}%`,
+            }}
+          />
+        </div>
+      )}
+
       {job.error && <div className={styles["error"]}>{job.error}</div>}
+
+      {isLocal && !!job.localSamples?.length && (
+        <>
+          <div className={styles["job-meta"]}>
+            Samples generated during training
+          </div>
+          <div className={styles["samples"]}>
+            {job.localSamples.map((path) => {
+              const url = store.localFileUrl(path);
+              return (
+                <div key={path} className={styles["sample"]}>
+                  {isVideoUrl(url) ? (
+                    <video src={url} controls loop muted />
+                  ) : (
+                    <a href={url} target="_blank" rel="noreferrer">
+                      <img src={url} alt="training sample" />
+                    </a>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
 
       {job.logs && (
         <div>
@@ -208,8 +254,8 @@ function JobCard(props: { job: LoraJob }) {
       {job.status === "succeeded" && (
         <>
           <div className={styles["job-links"]}>
-            {job.weights && (
-              <a href={job.weights} target="_blank" rel="noreferrer">
+            {weightsUrl && (
+              <a href={weightsUrl} target="_blank" rel="noreferrer">
                 <IconButton
                   icon={<DownloadIcon />}
                   text="Download weights"
@@ -272,6 +318,111 @@ function JobCard(props: { job: LoraJob }) {
   );
 }
 
+function LocalSetup(props: {
+  health: LocalHealth | null;
+  error: string;
+  models: LocalModel[];
+  modelId: string;
+  onModel: (id: string) => void;
+  onRetry: () => void;
+}) {
+  const store = useLoraStore();
+  const { health, error, models, modelId } = props;
+  const model = models.find((m) => m.id === modelId);
+  const gpu = health?.gpus[0];
+
+  return (
+    <List>
+      <ListItem
+        title="Local trainer"
+        subTitle={
+          health
+            ? `Connected · ${gpu ? `${gpu.name} (${gpu.vram_gb}GB)` : "no NVIDIA GPU detected"}${
+                health.toolkit_found ? "" : " · ai-toolkit not installed"
+              }`
+            : error ||
+              "Run local-trainer/setup then local-trainer/start on this PC"
+        }
+      >
+        <div className={styles["inline"]}>
+          <input
+            type="text"
+            value={store.localUrl}
+            onChange={(e) => store.setLocalUrl(e.currentTarget.value)}
+          />
+          <IconButton text="Retry" bordered onClick={props.onRetry} />
+        </div>
+      </ListItem>
+      {health && models.length > 0 ? (
+        <ListItem
+          title="Base model"
+          subTitle={
+            model
+              ? `${model.note} Needs ~${model.vram_gb}GB VRAM.${
+                  gpu && gpu.vram_gb < model.vram_gb
+                    ? ` Your GPU has ${gpu.vram_gb}GB, so this may run out of memory.`
+                    : ""
+                }`
+              : ""
+          }
+        >
+          <Select
+            value={modelId}
+            onChange={(e) => props.onModel(e.currentTarget.value)}
+          >
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+                {m.downloaded ? " ✓" : ""}
+              </option>
+            ))}
+          </Select>
+        </ListItem>
+      ) : (
+        <></>
+      )}
+      {health && model ? (
+        <ListItem
+          title="Offline use"
+          subTitle={
+            model.download?.status === "failed"
+              ? model.download.error || "Download failed"
+              : model.downloaded
+                ? "Downloaded. Training works without internet."
+                : model.download?.status === "downloading"
+                  ? `Downloading ${model.repo}… this can take a while`
+                  : `Download ${model.repo} once while online${
+                      model.gated
+                        ? " (gated: accept the license on Hugging Face and run huggingface-cli login first)"
+                        : ""
+                    }`
+          }
+        >
+          {model.downloaded ? (
+            <span style={{ color: "green" }}>Ready offline</span>
+          ) : model.download?.status === "downloading" ? (
+            <LoadingIcon />
+          ) : (
+            <IconButton
+              icon={<DownloadIcon />}
+              text="Download"
+              bordered
+              onClick={() =>
+                store
+                  .downloadLocalModel(model.id)
+                  .then(props.onRetry)
+                  .catch((e) => showToast(e.message))
+              }
+            />
+          )}
+        </ListItem>
+      ) : (
+        <></>
+      )}
+    </List>
+  );
+}
+
 export function LoraStudio() {
   const navigate = useNavigate();
   const store = useLoraStore();
@@ -294,10 +445,49 @@ export function LoraStudio() {
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
 
+  const isLocal = store.backend === "local";
+  const [health, setHealth] = useState<LocalHealth | null>(null);
+  const [healthError, setHealthError] = useState("");
+  const [localModels, setLocalModels] = useState<LocalModel[]>([]);
+  const [localModelId, setLocalModelId] = useState("");
+  const [rank, setRank] = useState(16);
+  const [lr, setLr] = useState(0.0001);
+  const [samplePrompts, setSamplePrompts] = useState("");
+
   const baseModel = BASE_MODELS.find((m) => m.id === baseModelId)!;
   const loraType = LORA_TYPES.find((t) => t.id === loraTypeId)!;
   const trainer = baseModel.trainer || customTrainer.trim();
-  const acceptsVideo = baseModel.media === "video";
+  const localModel = localModels.find((m) => m.id === localModelId);
+  const acceptsVideo = isLocal
+    ? localModel?.media === "video"
+    : baseModel.media === "video";
+
+  // talk to the local trainer while "This PC" is selected
+  function refreshLocal() {
+    Promise.all([store.localHealth(), store.localModels()])
+      .then(([h, models]) => {
+        setHealth(h);
+        setHealthError("");
+        setLocalModels(models);
+        setLocalModelId((id) => id || models[0]?.id || "");
+      })
+      .catch((e) => {
+        setHealth(null);
+        setHealthError(e.message);
+      });
+  }
+  useEffect(() => {
+    if (!isLocal) return;
+    refreshLocal();
+    const timer = setInterval(refreshLocal, 5000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLocal, store.localUrl]);
+
+  useEffect(() => {
+    if (localModel) setRank(localModel.default_rank);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [localModelId]);
 
   // load the selected trainer's input schema
   useEffect(() => {
@@ -324,7 +514,7 @@ export function LoraStudio() {
 
   // poll unfinished trainings
   const pending = store.jobs
-    .filter((j) => j.trainingId && !isLoraDone(j.status))
+    .filter((j) => (j.trainingId || j.localId) && !isLoraDone(j.status))
     .map((j) => j.id)
     .join(",");
   useEffect(() => {
@@ -332,7 +522,7 @@ export function LoraStudio() {
     const ids = pending.split(",");
     const tick = () => ids.forEach((id) => store.refreshJob(id));
     tick();
-    const timer = setInterval(tick, 10_000);
+    const timer = setInterval(tick, 5000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending]);
@@ -391,11 +581,27 @@ export function LoraStudio() {
   const hasRole = (role: Parameters<typeof findRoleField>[1]) =>
     !!schema && !!findRoleField(schema, role);
 
+  const backendProblems = isLocal
+    ? [
+        !health && "Start the local trainer on this PC",
+        health &&
+          !health.toolkit_found &&
+          "Install ai-toolkit (local-trainer/setup)",
+        health && !localModel && "Pick a base model",
+      ]
+    : [
+        !trainer && "Enter a trainer as owner/model",
+        schemaError && `Trainer: ${schemaError}`,
+        trainer && !schema && !schemaError && "Loading trainer settings…",
+        schema && !hasRole("dataset") && "This trainer has no dataset input",
+      ];
+  const defaultPrompts = [
+    loraType.caption(triggerWord.trim() || "TOK"),
+    `${loraType.caption(triggerWord.trim() || "TOK")}, cinematic lighting`,
+  ];
+
   const problems = [
-    !trainer && "Enter a trainer as owner/model",
-    schemaError && `Trainer: ${schemaError}`,
-    trainer && !schema && !schemaError && "Loading trainer settings…",
-    schema && !hasRole("dataset") && "This trainer has no dataset input",
+    ...backendProblems,
     !name.trim() && "Give your LoRA a name",
     !/^[A-Za-z0-9_ ]{2,}$/.test(triggerWord) &&
       "Trigger word: letters, digits, spaces or _ only",
@@ -404,8 +610,35 @@ export function LoraStudio() {
   ].filter(Boolean) as string[];
 
   async function train() {
-    if (!schema) return;
     const dataset = buildDataset();
+    if (isLocal) {
+      if (!localModel) return;
+      setBusy(true);
+      try {
+        await store.startLocalTraining({
+          name: name.trim(),
+          model: localModel,
+          loraType,
+          triggerWord: triggerWord.trim(),
+          steps,
+          rank,
+          lr,
+          samplePrompts: (samplePrompts.trim()
+            ? samplePrompts.split("\n")
+            : defaultPrompts
+          )
+            .map((p) => p.trim())
+            .filter(Boolean),
+          dataset,
+          imageCount: items.length,
+        });
+        resetForm();
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    if (!schema) return;
     if (dataset.size > MAX_DATASET_BYTES) {
       showToast("Dataset is too large to upload; remove a few files");
       return;
@@ -426,13 +659,17 @@ export function LoraStudio() {
         dataset,
         imageCount: items.length,
       });
-      items.forEach((i) => URL.revokeObjectURL(i.preview));
-      setItems([]);
-      setName("");
-      setConsent(false);
+      resetForm();
     } finally {
       setBusy(false);
     }
+  }
+
+  function resetForm() {
+    items.forEach((i) => URL.revokeObjectURL(i.preview));
+    setItems([]);
+    setName("");
+    setConsent(false);
   }
 
   return (
@@ -459,33 +696,71 @@ export function LoraStudio() {
         <div className={styles["lora-body"]}>
           <List>
             <ListItem
-              title="Replicate API token"
-              subTitle="Optional if the server has REPLICATE_API_TOKEN set. Training is billed to that Replicate account (usually a few dollars)."
+              title="Train on"
+              subTitle={
+                isLocal
+                  ? "Your own NVIDIA GPU via ai-toolkit. Free, private, and works offline once the base model is downloaded."
+                  : "Replicate's cloud GPUs. No setup, pay per training."
+              }
             >
-              <PasswordInput
-                value={store.replicateToken}
-                type="text"
-                placeholder="r8_..."
-                onChange={(e) => store.setToken(e.currentTarget.value)}
-              />
+              <Select
+                value={store.backend}
+                onChange={(e) =>
+                  store.setBackend(
+                    e.currentTarget.value as "replicate" | "local",
+                  )
+                }
+              >
+                <option value="replicate">Cloud (Replicate)</option>
+                <option value="local">This PC (ai-toolkit)</option>
+              </Select>
             </ListItem>
           </List>
 
+          {isLocal ? (
+            <LocalSetup
+              health={health}
+              error={healthError}
+              models={localModels}
+              modelId={localModelId}
+              onModel={setLocalModelId}
+              onRetry={refreshLocal}
+            />
+          ) : (
+            <List>
+              <ListItem
+                title="Replicate API token"
+                subTitle="Optional if the server has REPLICATE_API_TOKEN set. Training is billed to that Replicate account (usually a few dollars)."
+              >
+                <PasswordInput
+                  value={store.replicateToken}
+                  type="text"
+                  placeholder="r8_..."
+                  onChange={(e) => store.setToken(e.currentTarget.value)}
+                />
+              </ListItem>
+            </List>
+          )}
+
           <h3>1. Choose what to train</h3>
           <List>
-            <ListItem title="Base model" subTitle={baseModel.note}>
-              <Select
-                value={baseModelId}
-                onChange={(e) => setBaseModelId(e.currentTarget.value)}
-              >
-                {BASE_MODELS.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))}
-              </Select>
-            </ListItem>
-            {!baseModel.trainer ? (
+            {!isLocal ? (
+              <ListItem title="Base model" subTitle={baseModel.note}>
+                <Select
+                  value={baseModelId}
+                  onChange={(e) => setBaseModelId(e.currentTarget.value)}
+                >
+                  {BASE_MODELS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </Select>
+              </ListItem>
+            ) : (
+              <></>
+            )}
+            {!isLocal && !baseModel.trainer ? (
               <ListItem
                 title="Trainer"
                 subTitle="Replicate owner/model of a trainable LoRA trainer"
@@ -513,7 +788,9 @@ export function LoraStudio() {
               </Select>
             </ListItem>
           </List>
-          {schemaError && <div className={styles["error"]}>{schemaError}</div>}
+          {!isLocal && schemaError && (
+            <div className={styles["error"]}>{schemaError}</div>
+          )}
 
           <h3>2. Describe it</h3>
           <List>
@@ -538,7 +815,7 @@ export function LoraStudio() {
                 onChange={(e) => setTriggerWord(e.currentTarget.value)}
               />
             </ListItem>
-            {hasRole("steps") ? (
+            {isLocal || hasRole("steps") ? (
               <ListItem title="Training length">
                 <Select
                   value={steps}
@@ -554,7 +831,7 @@ export function LoraStudio() {
             ) : (
               <></>
             )}
-            {hasRole("autocaption") ? (
+            {!isLocal && hasRole("autocaption") ? (
               <ListItem
                 title="Auto-caption"
                 subTitle="Let the trainer describe each file. Captions you type below take priority."
@@ -570,7 +847,55 @@ export function LoraStudio() {
             )}
           </List>
 
-          {advancedFields.length > 0 && (
+          {isLocal && localModel && (
+            <div className={styles["advanced"]}>
+              <span
+                className="clickable"
+                onClick={() => setShowAdvanced(!showAdvanced)}
+              >
+                {showAdvanced ? "Hide" : "Show"} advanced settings
+              </span>
+              {showAdvanced && (
+                <List>
+                  <ListItem
+                    title="LoRA rank"
+                    subTitle="Higher captures more detail but makes bigger files and needs more VRAM"
+                  >
+                    <input
+                      type="number"
+                      min={4}
+                      max={128}
+                      value={rank}
+                      onChange={(e) => setRank(Number(e.currentTarget.value))}
+                    />
+                  </ListItem>
+                  <ListItem title="Learning rate">
+                    <input
+                      type="number"
+                      step="any"
+                      value={lr}
+                      onChange={(e) => setLr(Number(e.currentTarget.value))}
+                    />
+                  </ListItem>
+                  <ListItem
+                    title="Sample prompts"
+                    subTitle="One per line. Rendered during training so you can watch it learn. Leave empty for defaults."
+                    vertical
+                  >
+                    <textarea
+                      className={styles["prompts"]}
+                      rows={3}
+                      value={samplePrompts}
+                      placeholder={defaultPrompts.join("\n")}
+                      onChange={(e) => setSamplePrompts(e.currentTarget.value)}
+                    />
+                  </ListItem>
+                </List>
+              )}
+            </div>
+          )}
+
+          {!isLocal && advancedFields.length > 0 && (
             <div className={styles["advanced"]}>
               <span
                 className="clickable"
@@ -609,6 +934,10 @@ export function LoraStudio() {
             {loraType.tips} Images are resized to {MAX_SIDE}px in your browser
             before upload
             {acceptsVideo && "; keep video clips short (a few seconds each)"}.
+            {isLocal &&
+              ` Files without a caption are captioned "${loraType.caption(
+                triggerWord.trim() || "TOK",
+              )}".`}
           </div>
           <div
             className={`${styles["dropzone"]} ${dragging ? styles["dragging"] : ""}`}

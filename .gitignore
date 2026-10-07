@@ -46,3 +46,4 @@ dev
 *.key.pub
 
 masks.json
+local-trainer/ai-toolkit/
