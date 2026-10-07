@@ -47,3 +47,4 @@ dev
 
 masks.json
 local-trainer/ai-toolkit/
+__pycache__/
