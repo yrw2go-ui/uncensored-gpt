@@ -3,22 +3,18 @@ import { getBearerToken } from "@/app/client/api";
 import { createPersistStore } from "@/app/utils/store";
 import { nanoid } from "nanoid";
 import { useAccessStore } from "./access";
+import {
+  BaseModel,
+  LoraType,
+  TrainerSchema,
+  buildTrainingInput,
+  parseSchema,
+} from "@/app/utils/lora-trainers";
 
-export const LORA_TRAINER = "ostris/flux-dev-lora-trainer";
+export * from "@/app/utils/lora-trainers";
 
 export type LoraStatus =
-  | "uploading"
-  | "starting"
-  | "processing"
-  | "succeeded"
-  | "failed"
-  | "canceled";
-
-export const LORA_PRESETS = [
-  { name: "Quick (~10 min)", steps: 500 },
-  { name: "Standard (~20 min)", steps: 1000 },
-  { name: "High quality (~40 min)", steps: 2000 },
-];
+  "uploading" | "starting" | "processing" | "succeeded" | "failed" | "canceled";
 
 export type LoraSample = {
   id: string;
@@ -31,6 +27,9 @@ export type LoraSample = {
 export type LoraJob = {
   id: string;
   name: string;
+  baseModel: string;
+  loraType: string;
+  trainer: string;
   triggerWord: string;
   steps: number;
   imageCount: number;
@@ -123,7 +122,7 @@ export const useLoraStore = createPersistStore(
       });
     }
 
-    async function ensureDestination(name: string) {
+    async function createDestination(name: string) {
       const account = await api("v1/account");
       const owner = account.username;
       const modelName = `${slugify(name)}-${nanoid(6).toLowerCase()}`;
@@ -149,17 +148,34 @@ export const useLoraStore = createPersistStore(
         set({ jobs: _get().jobs.filter((j) => j.id !== id) });
       },
 
+      async fetchTrainerSchema(trainer: string): Promise<TrainerSchema> {
+        const model = await api(`v1/models/${trainer}`);
+        const version = model.latest_version;
+        const fields = parseSchema(version?.openapi_schema, "TrainingInput");
+        if (!version || fields.length === 0) {
+          throw new Error(`${trainer} does not support training`);
+        }
+        return { trainer, versionId: version.id, fields };
+      },
+
       async startTraining(opts: {
         name: string;
+        baseModel: BaseModel;
+        loraType: LoraType;
+        schema: TrainerSchema;
         triggerWord: string;
         steps: number;
         autocaption: boolean;
+        overrides: Record<string, any>;
         dataset: Blob;
         imageCount: number;
       }) {
         const job: LoraJob = {
           id: nanoid(),
           name: opts.name,
+          baseModel: opts.baseModel.name,
+          loraType: opts.loraType.name,
+          trainer: opts.schema.trainer,
           triggerWord: opts.triggerWord,
           steps: opts.steps,
           imageCount: opts.imageCount,
@@ -174,23 +190,20 @@ export const useLoraStore = createPersistStore(
           form.append("content", opts.dataset, "dataset.zip");
           const file = await api("v1/files", { method: "POST", body: form });
 
-          const destination = await ensureDestination(opts.name);
-          const trainer = await api(`v1/models/${LORA_TRAINER}`);
+          const destination = await createDestination(opts.name);
+          const input = buildTrainingInput(opts.schema, {
+            datasetUrl: file.urls.get,
+            triggerWord: opts.triggerWord,
+            steps: opts.steps,
+            autocaption: opts.autocaption,
+            loraType: opts.loraType,
+            overrides: opts.overrides,
+          });
           const training = await api(
-            `v1/models/${LORA_TRAINER}/versions/${trainer.latest_version.id}/trainings`,
+            `v1/models/${opts.schema.trainer}/versions/${opts.schema.versionId}/trainings`,
             {
               method: "POST",
-              body: JSON.stringify({
-                destination,
-                input: {
-                  input_images: file.urls.get,
-                  trigger_word: opts.triggerWord,
-                  steps: opts.steps,
-                  autocaption: opts.autocaption,
-                  lora_rank: 16,
-                  learning_rate: 0.0004,
-                },
-              }),
+              body: JSON.stringify({ destination, input }),
             },
           );
           patchJob(job.id, {
@@ -208,12 +221,16 @@ export const useLoraStore = createPersistStore(
         if (!job?.trainingId) return;
         try {
           const t = await api(`v1/trainings/${job.trainingId}`);
+          const output = t.output;
           patchJob(id, {
             status: t.status,
             logs: (t.logs as string | undefined)?.slice(-2000),
             error: t.error ?? undefined,
-            version: t.output?.version,
-            weights: t.output?.weights,
+            version: output?.version,
+            // trainers return either { weights } or a bare weights URL
+            weights:
+              output?.weights ??
+              (typeof output === "string" ? output : undefined),
           });
         } catch (e: any) {
           console.error("[LoRA] refresh failed", e);
@@ -229,7 +246,7 @@ export const useLoraStore = createPersistStore(
 
       async generateSample(jobId: string, prompt: string) {
         const job = _get().jobs.find((j) => j.id === jobId);
-        if (!job?.version) return;
+        if (!job?.version || !job.destination) return;
         const sample: LoraSample = {
           id: nanoid(),
           prompt,
@@ -239,21 +256,37 @@ export const useLoraStore = createPersistStore(
         patchJob(jobId, { samples: [sample, ...job.samples] });
 
         try {
+          // only send inputs the trained model actually accepts
+          const model = await api(`v1/models/${job.destination}`);
+          const accepted = new Set(
+            parseSchema(model.latest_version?.openapi_schema, "Input").map(
+              (f) => f.key,
+            ),
+          );
+          const wanted: Record<string, any> = { prompt, num_outputs: 1 };
+          const input = Object.fromEntries(
+            Object.entries(wanted).filter(
+              ([k]) => accepted.size === 0 || accepted.has(k),
+            ),
+          );
+
           // destination versions are "owner/model:hash"
           let p = await api("v1/predictions", {
             method: "POST",
             body: JSON.stringify({
               version: job.version.split(":").pop(),
-              input: { prompt, num_outputs: 1, output_format: "png" },
+              input,
             }),
           });
           while (!isLoraDone(p.status)) {
-            await new Promise((r) => setTimeout(r, 2000));
+            await new Promise((r) => setTimeout(r, 3000));
             p = await api(`v1/predictions/${p.id}`);
           }
           patchSample(jobId, sample.id, {
             status: p.status,
-            images: Array.isArray(p.output) ? p.output : [p.output],
+            images: (Array.isArray(p.output) ? p.output : [p.output]).filter(
+              Boolean,
+            ),
             error: p.error ?? undefined,
           });
         } catch (e: any) {
@@ -266,6 +299,16 @@ export const useLoraStore = createPersistStore(
   },
   {
     name: StoreKey.Lora,
-    version: 1.0,
+    version: 2.0,
+    migrate(state: any) {
+      // v1 jobs were all trained on FLUX.1 dev
+      state.jobs = (state.jobs ?? []).map((j: any) => ({
+        baseModel: "FLUX.1 [dev]",
+        loraType: "",
+        trainer: "ostris/flux-dev-lora-trainer",
+        ...j,
+      }));
+      return state;
+    },
   },
 );

@@ -54,7 +54,8 @@
   flex-direction: column;
   gap: 4px;
 
-  img {
+  img,
+  video {
     width: 100%;
     aspect-ratio: 1;
     object-fit: cover;
@@ -87,6 +88,16 @@
       height: 12px;
       filter: invert(1);
     }
+  }
+}
+
+.advanced {
+  margin-top: 12px;
+  font-size: 13px;
+
+  > span {
+    display: inline-block;
+    margin-bottom: 8px;
   }
 }
 
@@ -187,6 +198,7 @@
   }
 
   .sample img,
+  .sample video,
   .sample-placeholder {
     width: 100%;
     aspect-ratio: 1;

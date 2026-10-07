@@ -17,9 +17,15 @@ import { Path } from "@/app/constant";
 import { useNavigate } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import {
+  BASE_MODELS,
   LORA_PRESETS,
+  LORA_TYPES,
   LoraJob,
+  SchemaField,
+  TrainerSchema,
+  findRoleField,
   isLoraDone,
+  roleKeys,
   useLoraStore,
 } from "@/app/store/lora";
 import { createZip } from "@/app/utils/zip";
@@ -31,15 +37,17 @@ const MAX_SIDE = 1024;
 // Vercel and most edge hosts cap request bodies around 4.5MB
 const MAX_DATASET_BYTES = 4.4 * 1024 * 1024;
 
-type DatasetImage = {
+type DatasetItem = {
   id: string;
   name: string;
+  ext: string;
+  kind: "image" | "video";
   preview: string;
   data: Uint8Array;
   caption: string;
 };
 
-async function prepareImage(file: File): Promise<DatasetImage> {
+async function prepareImage(file: File): Promise<DatasetItem> {
   const bitmap = await createImageBitmap(file);
   const scale = Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height));
   const canvas = document.createElement("canvas");
@@ -57,16 +65,91 @@ async function prepareImage(file: File): Promise<DatasetImage> {
   return {
     id: nanoid(),
     name: file.name,
+    ext: "jpg",
+    kind: "image",
     preview: URL.createObjectURL(blob),
     data: new Uint8Array(await blob.arrayBuffer()),
     caption: "",
   };
 }
 
+async function prepareVideo(file: File): Promise<DatasetItem> {
+  return {
+    id: nanoid(),
+    name: file.name,
+    ext: file.name.split(".").pop()?.toLowerCase() || "mp4",
+    kind: "video",
+    preview: URL.createObjectURL(file),
+    data: new Uint8Array(await file.arrayBuffer()),
+    caption: "",
+  };
+}
+
+function isVideoUrl(url: string) {
+  return /\.(mp4|webm|mov)(\?|$)/i.test(url);
+}
+
 function statusColor(status: string) {
   if (status === "succeeded") return "green";
   if (status === "failed" || status === "canceled") return "red";
   return "var(--primary)";
+}
+
+function FieldEditor(props: {
+  field: SchemaField;
+  value: any;
+  onChange: (v: any) => void;
+}) {
+  const { field, value, onChange } = props;
+  const current = value ?? field.default;
+  if (field.enum) {
+    return (
+      <Select
+        value={String(current ?? "")}
+        onChange={(e) => {
+          const raw = e.currentTarget.value;
+          onChange(field.enum!.find((v) => String(v) === raw));
+        }}
+      >
+        {field.enum.map((v) => (
+          <option key={String(v)} value={String(v)}>
+            {String(v)}
+          </option>
+        ))}
+      </Select>
+    );
+  }
+  if (field.type === "boolean") {
+    return (
+      <input
+        type="checkbox"
+        checked={!!current}
+        onChange={(e) => onChange(e.currentTarget.checked)}
+      />
+    );
+  }
+  if (field.type === "integer" || field.type === "number") {
+    return (
+      <input
+        type="number"
+        value={current ?? ""}
+        min={field.minimum}
+        max={field.maximum}
+        step={field.type === "integer" ? 1 : "any"}
+        onChange={(e) => {
+          const raw = e.currentTarget.value;
+          onChange(raw === "" ? undefined : Number(raw));
+        }}
+      />
+    );
+  }
+  return (
+    <input
+      type="text"
+      value={current ?? ""}
+      onChange={(e) => onChange(e.currentTarget.value || undefined)}
+    />
+  );
 }
 
 function JobCard(props: { job: LoraJob }) {
@@ -82,8 +165,10 @@ function JobCard(props: { job: LoraJob }) {
         <div>
           <div className={styles["job-title"]}>{job.name}</div>
           <div className={styles["job-meta"]}>
-            trigger: <code>{job.triggerWord}</code> · {job.imageCount} images ·{" "}
-            {job.steps} steps · {new Date(job.createdAt).toLocaleString()}
+            {job.baseModel}
+            {job.loraType && ` · ${job.loraType}`} · trigger:{" "}
+            <code>{job.triggerWord}</code> · {job.imageCount} files ·{" "}
+            {new Date(job.createdAt).toLocaleString()}
           </div>
         </div>
         <div className={styles["job-actions"]}>
@@ -127,7 +212,7 @@ function JobCard(props: { job: LoraJob }) {
               <a href={job.weights} target="_blank" rel="noreferrer">
                 <IconButton
                   icon={<DownloadIcon />}
-                  text="Download .safetensors"
+                  text="Download weights"
                   bordered
                 />
               </a>
@@ -142,27 +227,33 @@ function JobCard(props: { job: LoraJob }) {
               </a>
             )}
           </div>
-          <div className={styles["try-row"]}>
-            <input
-              type="text"
-              value={prompt}
-              placeholder={`Prompt using ${job.triggerWord}`}
-              onChange={(e) => setPrompt(e.currentTarget.value)}
-            />
-            <IconButton
-              text="Generate"
-              type="primary"
-              disabled={!prompt.trim()}
-              onClick={() => store.generateSample(job.id, prompt.trim())}
-            />
-          </div>
+          {job.version && (
+            <div className={styles["try-row"]}>
+              <input
+                type="text"
+                value={prompt}
+                placeholder={`Prompt using ${job.triggerWord}`}
+                onChange={(e) => setPrompt(e.currentTarget.value)}
+              />
+              <IconButton
+                text="Generate"
+                type="primary"
+                disabled={!prompt.trim()}
+                onClick={() => store.generateSample(job.id, prompt.trim())}
+              />
+            </div>
+          )}
           <div className={styles["samples"]}>
             {job.samples.map((s) => (
               <div key={s.id} className={styles["sample"]} title={s.prompt}>
                 {s.images[0] ? (
-                  <a href={s.images[0]} target="_blank" rel="noreferrer">
-                    <img src={s.images[0]} alt={s.prompt} />
-                  </a>
+                  isVideoUrl(s.images[0]) ? (
+                    <video src={s.images[0]} controls loop muted />
+                  ) : (
+                    <a href={s.images[0]} target="_blank" rel="noreferrer">
+                      <img src={s.images[0]} alt={s.prompt} />
+                    </a>
+                  )
                 ) : (
                   <div className={styles["sample-placeholder"]}>
                     {isLoraDone(s.status) ? (
@@ -186,14 +277,50 @@ export function LoraStudio() {
   const store = useLoraStore();
   const fileInput = useRef<HTMLInputElement>(null);
 
+  const [baseModelId, setBaseModelId] = useState(BASE_MODELS[0].id);
+  const [customTrainer, setCustomTrainer] = useState("");
+  const [loraTypeId, setLoraTypeId] = useState(LORA_TYPES[0].id);
+  const [schema, setSchema] = useState<TrainerSchema | null>(null);
+  const [schemaError, setSchemaError] = useState("");
+  const [overrides, setOverrides] = useState<Record<string, any>>({});
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
   const [name, setName] = useState("");
   const [triggerWord, setTriggerWord] = useState("TOK");
   const [steps, setSteps] = useState(LORA_PRESETS[1].steps);
   const [autocaption, setAutocaption] = useState(true);
   const [consent, setConsent] = useState(false);
-  const [images, setImages] = useState<DatasetImage[]>([]);
+  const [items, setItems] = useState<DatasetItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
+
+  const baseModel = BASE_MODELS.find((m) => m.id === baseModelId)!;
+  const loraType = LORA_TYPES.find((t) => t.id === loraTypeId)!;
+  const trainer = baseModel.trainer || customTrainer.trim();
+  const acceptsVideo = baseModel.media === "video";
+
+  // load the selected trainer's input schema
+  useEffect(() => {
+    setSchema(null);
+    setSchemaError("");
+    setOverrides({});
+    if (!/^[\w.-]+\/[\w.-]+$/.test(trainer)) return;
+    let cancelled = false;
+    const timer = setTimeout(
+      () => {
+        store
+          .fetchTrainerSchema(trainer)
+          .then((s) => !cancelled && setSchema(s))
+          .catch((e) => !cancelled && setSchemaError(e.message));
+      },
+      baseModel.trainer ? 0 : 600,
+    );
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trainer]);
 
   // poll unfinished trainings
   const pending = store.jobs
@@ -211,24 +338,32 @@ export function LoraStudio() {
   }, [pending]);
 
   async function addFiles(files: FileList | File[]) {
-    const list = Array.from(files).filter((f) => f.type.startsWith("image/"));
-    const room = MAX_IMAGES - images.length;
-    if (list.length > room) showToast(`Only ${MAX_IMAGES} images allowed`);
-    const prepared: DatasetImage[] = [];
+    const list = Array.from(files).filter(
+      (f) =>
+        f.type.startsWith("image/") ||
+        (acceptsVideo && f.type.startsWith("video/")),
+    );
+    const room = MAX_IMAGES - items.length;
+    if (list.length > room) showToast(`Only ${MAX_IMAGES} files allowed`);
+    const prepared: DatasetItem[] = [];
     for (const f of list.slice(0, room)) {
       try {
-        prepared.push(await prepareImage(f));
+        prepared.push(
+          f.type.startsWith("video/")
+            ? await prepareVideo(f)
+            : await prepareImage(f),
+        );
       } catch {
         showToast(`Couldn't read ${f.name}`);
       }
     }
-    setImages((prev) => [...prev, ...prepared]);
+    setItems((prev) => [...prev, ...prepared]);
   }
 
-  function removeImage(id: string) {
-    setImages((prev) => {
-      const img = prev.find((i) => i.id === id);
-      if (img) URL.revokeObjectURL(img.preview);
+  function removeItem(id: string) {
+    setItems((prev) => {
+      const item = prev.find((i) => i.id === id);
+      if (item) URL.revokeObjectURL(item.preview);
       return prev.filter((i) => i.id !== id);
     });
   }
@@ -236,13 +371,13 @@ export function LoraStudio() {
   const encoder = new TextEncoder();
   function buildDataset() {
     return createZip(
-      images.flatMap((img, i) => {
-        const base = `img_${String(i + 1).padStart(3, "0")}`;
-        const entries = [{ name: `${base}.jpg`, data: img.data }];
-        if (img.caption.trim()) {
+      items.flatMap((item, i) => {
+        const base = `${item.kind}_${String(i + 1).padStart(3, "0")}`;
+        const entries = [{ name: `${base}.${item.ext}`, data: item.data }];
+        if (item.caption.trim()) {
           entries.push({
             name: `${base}.txt`,
-            data: encoder.encode(img.caption.trim()),
+            data: encoder.encode(item.caption.trim()),
           });
         }
         return entries;
@@ -250,32 +385,49 @@ export function LoraStudio() {
     );
   }
 
+  const handled = schema ? roleKeys(schema) : new Set<string>();
+  const advancedFields =
+    schema?.fields.filter((f) => !handled.has(f.key)) ?? [];
+  const hasRole = (role: Parameters<typeof findRoleField>[1]) =>
+    !!schema && !!findRoleField(schema, role);
+
   const problems = [
+    !trainer && "Enter a trainer as owner/model",
+    schemaError && `Trainer: ${schemaError}`,
+    trainer && !schema && !schemaError && "Loading trainer settings…",
+    schema && !hasRole("dataset") && "This trainer has no dataset input",
     !name.trim() && "Give your LoRA a name",
-    !/^[A-Za-z0-9_]{2,}$/.test(triggerWord) &&
-      "Trigger word: letters, digits or _ only",
-    images.length < MIN_IMAGES && `Add at least ${MIN_IMAGES} images`,
+    !/^[A-Za-z0-9_ ]{2,}$/.test(triggerWord) &&
+      "Trigger word: letters, digits, spaces or _ only",
+    items.length < MIN_IMAGES && `Add at least ${MIN_IMAGES} files`,
     !consent && "Confirm the image rights checkbox",
   ].filter(Boolean) as string[];
 
   async function train() {
+    if (!schema) return;
     const dataset = buildDataset();
     if (dataset.size > MAX_DATASET_BYTES) {
-      showToast("Dataset is too large to upload; remove a few images");
+      showToast("Dataset is too large to upload; remove a few files");
       return;
     }
     setBusy(true);
     try {
       await store.startTraining({
         name: name.trim(),
-        triggerWord,
+        baseModel,
+        loraType,
+        schema,
+        triggerWord: triggerWord.trim(),
         steps,
         autocaption,
+        overrides: Object.fromEntries(
+          Object.entries(overrides).filter(([, v]) => v !== undefined),
+        ),
         dataset,
-        imageCount: images.length,
+        imageCount: items.length,
       });
-      images.forEach((i) => URL.revokeObjectURL(i.preview));
-      setImages([]);
+      items.forEach((i) => URL.revokeObjectURL(i.preview));
+      setItems([]);
       setName("");
       setConsent(false);
     } finally {
@@ -290,7 +442,7 @@ export function LoraStudio() {
           <div className="window-header-title">
             <div className="window-header-main-title">LoRA Studio</div>
             <div className="window-header-sub-title">
-              Train a FLUX LoRA from your images in a few clicks
+              Train image and video LoRAs from your files in a few clicks
             </div>
           </div>
           <div className="window-actions">
@@ -308,7 +460,7 @@ export function LoraStudio() {
           <List>
             <ListItem
               title="Replicate API token"
-              subTitle="Optional if the server has REPLICATE_API_TOKEN set. Training costs roughly $1–4 on your Replicate account."
+              subTitle="Optional if the server has REPLICATE_API_TOKEN set. Training is billed to that Replicate account (usually a few dollars)."
             >
               <PasswordInput
                 value={store.replicateToken}
@@ -319,7 +471,51 @@ export function LoraStudio() {
             </ListItem>
           </List>
 
-          <h3>1. Describe it</h3>
+          <h3>1. Choose what to train</h3>
+          <List>
+            <ListItem title="Base model" subTitle={baseModel.note}>
+              <Select
+                value={baseModelId}
+                onChange={(e) => setBaseModelId(e.currentTarget.value)}
+              >
+                {BASE_MODELS.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </Select>
+            </ListItem>
+            {!baseModel.trainer ? (
+              <ListItem
+                title="Trainer"
+                subTitle="Replicate owner/model of a trainable LoRA trainer"
+              >
+                <input
+                  type="text"
+                  value={customTrainer}
+                  placeholder="owner/model"
+                  onChange={(e) => setCustomTrainer(e.currentTarget.value)}
+                />
+              </ListItem>
+            ) : (
+              <></>
+            )}
+            <ListItem title="LoRA type" subTitle={loraType.tips}>
+              <Select
+                value={loraTypeId}
+                onChange={(e) => setLoraTypeId(e.currentTarget.value)}
+              >
+                {LORA_TYPES.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </Select>
+            </ListItem>
+          </List>
+          {schemaError && <div className={styles["error"]}>{schemaError}</div>}
+
+          <h3>2. Describe it</h3>
           <List>
             <ListItem
               title="Name"
@@ -339,40 +535,80 @@ export function LoraStudio() {
               <input
                 type="text"
                 value={triggerWord}
-                onChange={(e) => setTriggerWord(e.currentTarget.value.trim())}
+                onChange={(e) => setTriggerWord(e.currentTarget.value)}
               />
             </ListItem>
-            <ListItem title="Training length">
-              <Select
-                value={steps}
-                onChange={(e) => setSteps(Number(e.currentTarget.value))}
+            {hasRole("steps") ? (
+              <ListItem title="Training length">
+                <Select
+                  value={steps}
+                  onChange={(e) => setSteps(Number(e.currentTarget.value))}
+                >
+                  {LORA_PRESETS.map((p) => (
+                    <option key={p.steps} value={p.steps}>
+                      {p.name} · {p.steps} steps
+                    </option>
+                  ))}
+                </Select>
+              </ListItem>
+            ) : (
+              <></>
+            )}
+            {hasRole("autocaption") ? (
+              <ListItem
+                title="Auto-caption"
+                subTitle="Let the trainer describe each file. Captions you type below take priority."
               >
-                {LORA_PRESETS.map((p) => (
-                  <option key={p.steps} value={p.steps}>
-                    {p.name} · {p.steps} steps
-                  </option>
-                ))}
-              </Select>
-            </ListItem>
-            <ListItem
-              title="Auto-caption"
-              subTitle="Let the trainer describe each image. Captions you type below take priority."
-            >
-              <input
-                type="checkbox"
-                checked={autocaption}
-                onChange={(e) => setAutocaption(e.currentTarget.checked)}
-              />
-            </ListItem>
+                <input
+                  type="checkbox"
+                  checked={autocaption}
+                  onChange={(e) => setAutocaption(e.currentTarget.checked)}
+                />
+              </ListItem>
+            ) : (
+              <></>
+            )}
           </List>
 
+          {advancedFields.length > 0 && (
+            <div className={styles["advanced"]}>
+              <span
+                className="clickable"
+                onClick={() => setShowAdvanced(!showAdvanced)}
+              >
+                {showAdvanced ? "Hide" : "Show"} advanced settings (
+                {advancedFields.length})
+              </span>
+              {showAdvanced && (
+                <List>
+                  {advancedFields.map((f) => (
+                    <ListItem
+                      key={f.key}
+                      title={f.key}
+                      subTitle={f.description}
+                    >
+                      <FieldEditor
+                        field={f}
+                        value={overrides[f.key]}
+                        onChange={(v) =>
+                          setOverrides((prev) => ({ ...prev, [f.key]: v }))
+                        }
+                      />
+                    </ListItem>
+                  ))}
+                </List>
+              )}
+            </div>
+          )}
+
           <h3>
-            2. Add images ({images.length}/{MAX_IMAGES})
+            3. Add {acceptsVideo ? "clips or images" : "images"} ({items.length}
+            /{MAX_IMAGES})
           </h3>
           <div className={styles["tips"]}>
-            Best results: 10–30 sharp images, varied angles, lighting and
-            backgrounds; the subject clearly visible. Images are resized to{" "}
-            {MAX_SIDE}px in your browser before upload.
+            {loraType.tips} Images are resized to {MAX_SIDE}px in your browser
+            before upload
+            {acceptsVideo && "; keep video clips short (a few seconds each)"}.
           </div>
           <div
             className={`${styles["dropzone"]} ${dragging ? styles["dragging"] : ""}`}
@@ -389,11 +625,11 @@ export function LoraStudio() {
             }}
           >
             <UploadIcon />
-            <div>Drop images here or click to browse</div>
+            <div>Drop files here or click to browse</div>
             <input
               ref={fileInput}
               type="file"
-              accept="image/*"
+              accept={acceptsVideo ? "image/*,video/*" : "image/*"}
               multiple
               hidden
               onChange={(e) => {
@@ -403,26 +639,30 @@ export function LoraStudio() {
             />
           </div>
 
-          {images.length > 0 && (
+          {items.length > 0 && (
             <div className={styles["grid"]}>
-              {images.map((img) => (
-                <div key={img.id} className={styles["thumb"]}>
-                  <img src={img.preview} alt={img.name} />
+              {items.map((item) => (
+                <div key={item.id} className={styles["thumb"]}>
+                  {item.kind === "video" ? (
+                    <video src={item.preview} muted loop autoPlay />
+                  ) : (
+                    <img src={item.preview} alt={item.name} />
+                  )}
                   <div
                     className={styles["thumb-remove"]}
-                    onClick={() => removeImage(img.id)}
+                    onClick={() => removeItem(item.id)}
                   >
                     <CloseIcon />
                   </div>
                   <input
                     type="text"
-                    value={img.caption}
+                    value={item.caption}
                     placeholder="caption (optional)"
                     onChange={(e) => {
                       const caption = e.currentTarget.value;
-                      setImages((prev) =>
+                      setItems((prev) =>
                         prev.map((i) =>
-                          i.id === img.id ? { ...i, caption } : i,
+                          i.id === item.id ? { ...i, caption } : i,
                         ),
                       );
                     }}
@@ -432,7 +672,7 @@ export function LoraStudio() {
             </div>
           )}
 
-          <h3>3. Train</h3>
+          <h3>4. Train</h3>
           <label className={styles["consent"]}>
             <input
               type="checkbox"
@@ -440,7 +680,7 @@ export function LoraStudio() {
               onChange={(e) => setConsent(e.currentTarget.checked)}
             />
             <span>
-              I own these images or have the rights to use them, and any real
+              I own these files or have the rights to use them, and any real
               person shown has agreed to having a model trained on their
               likeness.
             </span>
