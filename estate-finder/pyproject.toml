@@ -1,0 +1,16 @@
+[project]
+name = "estate-finder"
+version = "0.1.0"
+description = "Phase 0 estate-to-parcel matching for Lake and Porter Counties, Indiana"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+estate-finder = "estate_finder.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["estate_finder"]

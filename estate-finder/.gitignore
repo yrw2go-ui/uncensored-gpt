@@ -1,0 +1,5 @@
+# Real records (obituaries name living survivors) never go in git.
+data/
+*.db
+__pycache__/
+*.pyc
