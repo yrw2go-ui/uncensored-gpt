@@ -29,7 +29,6 @@ import { AuthPage } from "./auth";
 import { getClientConfig } from "../config/client";
 import { type ClientApi, getClientApi } from "../client/api";
 import { useAccessStore } from "../store";
-import { useAccountStore } from "../store/account";
 
 export function Loading(props: { noLogo?: boolean }) {
   return (
@@ -218,13 +217,7 @@ export function Home() {
     useAccessStore.getState().fetch();
   }, []);
 
-  const hasHydrated = useHasHydrated();
-  useEffect(() => {
-    // wait for local stores to load before merging saved chats into them
-    if (hasHydrated) useAccountStore.getState().init();
-  }, [hasHydrated]);
-
-  if (!hasHydrated) {
+  if (!useHasHydrated()) {
     return <Loading />;
   }
 
