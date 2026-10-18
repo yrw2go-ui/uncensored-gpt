@@ -76,7 +76,6 @@ import { useNavigate } from "react-router-dom";
 import { Avatar, AvatarPicker } from "./emoji";
 import { getClientConfig } from "../config/client";
 import { useSyncStore } from "../store/sync";
-import { useAccountStore } from "../store/account";
 import { nanoid } from "nanoid";
 import { useMaskStore } from "../store/mask";
 import { ProviderType } from "../utils/cloud";
@@ -472,103 +471,6 @@ function SyncConfigModal(props: { onClose?: () => void }) {
         )}
       </Modal>
     </div>
-  );
-}
-
-function AccountItems() {
-  const account = useAccountStore();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  if (account.status === "disabled" || account.status === "loading") {
-    return null;
-  }
-
-  async function run(action: () => Promise<void>) {
-    setBusy(true);
-    try {
-      await action();
-      setPassword("");
-    } catch (e) {
-      showToast(Locale.Settings.Account.Failed((e as Error).message));
-      console.error("[Account]", e);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (account.status === "signedIn") {
-    return (
-      <List>
-        <ListItem
-          title={Locale.Settings.Account.SignedIn(account.user?.email ?? "")}
-          subTitle={
-            account.lastSyncTime
-              ? Locale.Settings.Account.LastSaved(
-                  new Date(account.lastSyncTime).toLocaleString(),
-                )
-              : undefined
-          }
-        >
-          <div style={{ display: "flex" }}>
-            <IconButton
-              icon={<ResetIcon />}
-              text={Locale.Settings.Account.SyncNow}
-              disabled={busy || account.syncing}
-              onClick={() => run(account.sync)}
-            />
-            <IconButton
-              icon={<CloseIcon />}
-              text={Locale.Settings.Account.SignOut}
-              disabled={busy}
-              onClick={() => run(account.signOut)}
-            />
-          </div>
-        </ListItem>
-      </List>
-    );
-  }
-
-  const canSubmit = !busy && email.length > 0 && password.length > 0;
-
-  return (
-    <List>
-      <ListItem
-        title={Locale.Settings.Account.Title}
-        subTitle={Locale.Settings.Account.SignedOut}
-      />
-      <ListItem title={Locale.Settings.Account.Email}>
-        <input
-          type="email"
-          autoComplete="email"
-          value={email}
-          onChange={(e) => setEmail(e.currentTarget.value)}
-        />
-      </ListItem>
-      <ListItem title={Locale.Settings.Account.Password}>
-        <PasswordInput
-          autoComplete="current-password"
-          value={password}
-          onChange={(e) => setPassword(e.currentTarget.value)}
-        />
-      </ListItem>
-      <ListItem title="">
-        <div style={{ display: "flex" }}>
-          <IconButton
-            text={Locale.Settings.Account.SignIn}
-            type="primary"
-            disabled={!canSubmit}
-            onClick={() => run(() => account.signIn(email, password))}
-          />
-          <IconButton
-            text={Locale.Settings.Account.SignUp}
-            disabled={!canSubmit}
-            onClick={() => run(() => account.signUp(email, password))}
-          />
-        </div>
-      </ListItem>
-    </List>
   );
 }
 
@@ -1463,7 +1365,6 @@ export function Settings() {
           </ListItem>
         </List>
 
-        <AccountItems />
         <SyncItems />
 
         <List>

@@ -55,8 +55,6 @@ export enum ApiPath {
   Moonshot = "/api/moonshot",
   Stability = "/api/stability",
   Artifacts = "/api/artifacts",
-  NeonAuth = "/api/neon-auth",
-  UserState = "/api/user-state",
 }
 
 export enum SlotID {
