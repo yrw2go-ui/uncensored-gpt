@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Edit Site · Starz Realty</title>
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+  <style>
+    :root { --accent: #c8a24a; --dark: #0f1b2d; --bg: #f6f4ef; --card: #fff; --text: #1c2430; --muted: #5d6675; --border: #e2ddd2; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #0d1420; --card: #162133; --text: #e9ecf1; --muted: #a3acba; --border: #243246; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+    header { position: sticky; top: 0; z-index: 5; background: var(--dark); color: #fff; padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    header h1 { font-size: 1.05rem; margin: 0 auto 0 0; }
+    button, .btn { font: inherit; border: 0; border-radius: 999px; padding: .5em 1em; cursor: pointer; background: #ffffff22; color: #fff; text-decoration: none; }
+    .primary { background: var(--accent); color: #111; font-weight: 600; }
+    main { max-width: 860px; margin: 0 auto; padding: 16px; }
+    .help { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px; color: var(--muted); font-size: .92rem; }
+    details { background: var(--card); border: 1px solid var(--border); border-radius: 12px; margin: 12px 0; }
+    summary { padding: 14px 16px; font-weight: 600; cursor: pointer; text-transform: capitalize; }
+    .body { padding: 0 16px 16px; }
+    label { display: block; margin: 10px 0; font-size: .85rem; color: var(--muted); text-transform: capitalize; }
+    input, textarea { display: block; width: 100%; margin-top: 4px; padding: .6em .7em; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; }
+    input[type=color] { height: 40px; padding: 2px; }
+    .item { border: 1px dashed var(--border); border-radius: 10px; padding: 4px 12px 12px; margin: 10px 0; }
+    .row { display: flex; justify-content: space-between; align-items: center; }
+    .small { background: transparent; color: var(--muted); border: 1px solid var(--border); font-size: .8rem; }
+    .thumb { max-height: 70px; border-radius: 6px; margin-top: 6px; }
+    #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--dark); color: #fff; padding: .7em 1.2em; border-radius: 999px; opacity: 0; transition: opacity .2s; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>★ Site editor</h1>
+    <button class="primary" id="save">Save &amp; preview</button>
+    <button id="download">Download content.json</button>
+    <label class="btn" style="margin:0;color:#fff;text-transform:none">Import<input type="file" id="import" accept="application/json" hidden /></label>
+    <button id="reset">Discard draft</button>
+  </header>
+  <main>
+    <p class="help">
+      Edit any text, price, photo link or contact detail below. <b>Save &amp; preview</b> shows your changes on the site in this browser only.
+      To publish for everyone, click <b>Download content.json</b> and replace the file of the same name on the website host (or send it to your web developer).
+    </p>
+    <div id="editor"></div>
+  </main>
+  <div id="toast"></div>
+  <script>
+    const DRAFT_KEY = "starz-draft";
+    let data;
+
+    const toast = (msg) => { const t = document.getElementById("toast"); t.textContent = msg; t.style.opacity = 1; setTimeout(() => (t.style.opacity = 0), 1800); };
+    const nice = (k) => String(k).replace(/([A-Z])/g, " $1");
+    const blankLike = (v) => Array.isArray(v) ? [] : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).map((k) => [k, blankLike(v[k])])) : typeof v === "number" ? 0 : "";
+
+    function field(parent, key, value, onChange) {
+      const label = document.createElement("label");
+      label.textContent = nice(key);
+      const long = typeof value === "string" && value.length > 70;
+      const input = document.createElement(long ? "textarea" : "input");
+      if (long) input.rows = 3;
+      if (/accent|dark/.test(key) && /^#/.test(value)) input.type = "color";
+      else if (typeof value === "number") input.type = "number", input.step = "any";
+      input.value = value;
+      input.oninput = () => onChange(input.type === "number" ? Number(input.value) : input.value);
+      label.append(input);
+      if (/image|photo/i.test(key)) {
+        const img = document.createElement("img");
+        img.className = "thumb"; img.src = value; img.hidden = !value; img.alt = "";
+        input.addEventListener("input", () => { img.src = input.value; img.hidden = !input.value; });
+        label.append(img);
+      }
+      parent.append(label);
+    }
+
+    function build(parent, obj, rerender) {
+      for (const [key, value] of Object.entries(obj)) {
+        if (Array.isArray(value)) {
+          const wrap = document.createElement("div");
+          wrap.innerHTML = `<div class="row"><b style="text-transform:capitalize">${nice(key)}</b></div>`;
+          value.forEach((item, i) => {
+            const box = document.createElement("div");
+            box.className = "item";
+            const head = document.createElement("div");
+            head.className = "row";
+            head.innerHTML = `<small>#${i + 1}</small>`;
+            const ctrls = document.createElement("span");
+            const mk = (txt, fn) => { const b = document.createElement("button"); b.className = "small"; b.textContent = txt; b.onclick = fn; ctrls.append(b, " "); };
+            if (i > 0) mk("↑", () => { [value[i - 1], value[i]] = [value[i], value[i - 1]]; rerender(); });
+            mk("Remove", () => { if (confirm("Remove this item?")) { value.splice(i, 1); rerender(); } });
+            head.append(ctrls);
+            box.append(head);
+            if (item && typeof item === "object") build(box, item, rerender);
+            else field(box, "text", item, (v) => (value[i] = v));
+            wrap.append(box);
+          });
+          const add = document.createElement("button");
+          add.className = "small"; add.textContent = "+ Add " + nice(key).replace(/s$/, "");
+          add.onclick = () => { value.push(value.length ? blankLike(value[0]) : ""); rerender(); };
+          wrap.append(add);
+          parent.append(wrap);
+        } else if (value && typeof value === "object") {
+          build(parent, value, rerender);
+        } else {
+          field(parent, key, value, (v) => (obj[key] = v));
+        }
+      }
+    }
+
+    function render() {
+      const editor = document.getElementById("editor");
+      const open = [...editor.querySelectorAll("details[open]")].map((d) => d.dataset.key);
+      editor.innerHTML = "";
+      for (const [key, value] of Object.entries(data)) {
+        const d = document.createElement("details");
+        d.dataset.key = key;
+        d.open = open.includes(key);
+        d.innerHTML = `<summary>${nice(key)}</summary>`;
+        const body = document.createElement("div");
+        body.className = "body";
+        build(body, Array.isArray(value) ? { [key]: value } : value, render);
+        d.append(body);
+        editor.append(d);
+      }
+    }
+
+    async function load() {
+      try { const d = localStorage.getItem(DRAFT_KEY); if (d) return JSON.parse(d); } catch {}
+      return (await fetch("content.json", { cache: "no-cache" })).json();
+    }
+
+    document.getElementById("save").onclick = () => {
+      try { localStorage.setItem(DRAFT_KEY, JSON.stringify(data)); } catch { return toast("Couldn't save in this browser"); }
+      window.open("./", "preview");
+    };
+    document.getElementById("download").onclick = () => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2) + "\n"], { type: "application/json" }));
+      a.download = "content.json";
+      a.click();
+      toast("content.json downloaded");
+    };
+    document.getElementById("import").onchange = async (e) => {
+      try { data = JSON.parse(await e.target.files[0].text()); render(); toast("Imported"); } catch { toast("That file isn't valid"); }
+    };
+    document.getElementById("reset").onclick = async () => {
+      if (!confirm("Discard your unpublished changes?")) return;
+      try { localStorage.removeItem(DRAFT_KEY); } catch {}
+      data = await load(); render(); toast("Draft discarded");
+    };
+
+    load().then((d) => { data = d; render(); });
+  </script>
+</body>
+</html>

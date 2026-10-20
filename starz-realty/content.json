@@ -1,0 +1,58 @@
+{
+  "brand": {
+    "name": "Starz Realty",
+    "tagline": "Northwest Indiana's hometown real estate team",
+    "accent": "#c8a24a",
+    "dark": "#0f1b2d"
+  },
+  "contact": {
+    "phone": "(219) 306-8911",
+    "text": "(219) 400-0318",
+    "email": "info@starz-realty.com",
+    "address": "2701 W 45th Ave, Gary, IN 46408",
+    "hours": "Mon–Sat 9am–6pm · Sundays by appointment"
+  },
+  "hero": {
+    "title": "Find your place in Northwest Indiana",
+    "subtitle": "Buying, selling or renting, Starz Realty pairs local know-how with straight answers, so you can move with confidence.",
+    "image": "https://images.unsplash.com/photo-1568605114967-8130f3a36994?auto=format&fit=crop&w=1800&q=70",
+    "ctaPrimary": "Talk to an agent",
+    "ctaSecondary": "See featured homes"
+  },
+  "stats": [
+    { "value": "10+", "label": "Years serving the region" },
+    { "value": "Same-day", "label": "Replies to inquiries" },
+    { "value": "Lake County", "label": "& surrounding areas" }
+  ],
+  "services": [
+    { "icon": "🏡", "title": "Buy a Home", "text": "From pre-approval to closing day, we find homes that fit your budget and walk you through every step." },
+    { "icon": "💰", "title": "Sell Your Home", "text": "Accurate pricing, professional photos and active marketing to get you the strongest offer." },
+    { "icon": "📈", "title": "Free Home Valuation", "text": "Curious what your home is worth? Get a no-obligation market analysis from a local agent." },
+    { "icon": "🔑", "title": "Rentals & Investing", "text": "Help for landlords, renters and investors looking for income property across NW Indiana." }
+  ],
+  "listings": [
+    { "title": "Updated Ranch", "city": "Merrillville, IN", "price": "$239,900", "beds": 3, "baths": 2, "sqft": "1,450", "status": "For Sale", "image": "https://images.unsplash.com/photo-1570129477492-45c003edd2be?auto=format&fit=crop&w=900&q=70" },
+    { "title": "Two-Story Family Home", "city": "Schererville, IN", "price": "$329,000", "beds": 4, "baths": 2.5, "sqft": "2,200", "status": "New", "image": "https://images.unsplash.com/photo-1564013799919-ab600027ffc6?auto=format&fit=crop&w=900&q=70" },
+    { "title": "Starter Bungalow", "city": "Gary, IN", "price": "$149,500", "beds": 2, "baths": 1, "sqft": "980", "status": "Pending", "image": "https://images.unsplash.com/photo-1583608205776-bfd35f0d9f83?auto=format&fit=crop&w=900&q=70" }
+  ],
+  "areas": ["Gary", "Merrillville", "Hobart", "Crown Point", "Schererville", "Hammond", "Highland", "Munster", "Portage", "Valparaiso"],
+  "about": {
+    "title": "Local agents. Real answers.",
+    "text": "Starz Realty is an independent brokerage rooted in Northwest Indiana. We know these neighborhoods because we live and work in them, and we treat every client like a neighbor, whether it's a first home or a tenth investment property.",
+    "image": "https://images.unsplash.com/photo-1600880292203-757bb62b4baf?auto=format&fit=crop&w=1000&q=70"
+  },
+  "team": [
+    { "name": "Agent Name", "role": "Broker / Owner", "phone": "(219) 306-8911", "email": "info@starz-realty.com", "photo": "" },
+    { "name": "Agent Name", "role": "Realtor®", "phone": "(219) 400-0318", "email": "info@starz-realty.com", "photo": "" },
+    { "name": "Agent Name", "role": "Realtor®", "phone": "(219) 400-0318", "email": "info@starz-realty.com", "photo": "" }
+  ],
+  "testimonials": [
+    { "quote": "They made our first home purchase feel easy and kept us informed the whole way.", "name": "Sample Client", "place": "Hobart" },
+    { "quote": "Sold above asking in under two weeks. Great communication from start to finish.", "name": "Sample Client", "place": "Crown Point" }
+  ],
+  "social": {
+    "facebook": "",
+    "instagram": "",
+    "zillow": ""
+  }
+}
